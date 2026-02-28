@@ -1,0 +1,11 @@
+{
+  "domain": "dragontree_reolink",
+  "name": "Dragontree Reolink",
+  "codeowners": [],
+  "config_flow": true,
+  "dependencies": ["reolink"],
+  "documentation": "",
+  "iot_class": "local_polling",
+  "requirements": ["av>=10.0.0"],
+  "version": "1.0.0"
+}

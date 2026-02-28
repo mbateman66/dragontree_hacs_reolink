@@ -1,0 +1,30 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Dragontree Reolink Setup",
+        "description": "Configure the Reolink recording downloader. Recordings will be saved to /media/Dragontree/Reolink. The Reolink integration must be set up first.",
+        "data": {
+          "max_disk_gb": "Max disk space (GB)",
+          "stream": "Stream quality"
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Only one instance of Dragontree Reolink is allowed.",
+      "no_reolink": "No Reolink integration is loaded. Please set up Reolink first."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Dragontree Reolink Options",
+        "description": "Update downloader settings. Changes take effect immediately.",
+        "data": {
+          "max_disk_gb": "Max disk space (GB)",
+          "stream": "Stream quality"
+        }
+      }
+    }
+  }
+}
