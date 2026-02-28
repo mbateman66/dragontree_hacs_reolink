@@ -6,19 +6,28 @@ structure exposed by the Reolink media source.
 
 Key behaviour:
 - On setup: downloads the 2 most recent recordings from each camera.
-- Polling: checks for new recordings every 5 minutes.
-- Motion-triggered: re-checks a channel 60 s after a motion/AI event fires
-  (allowing the camera to finish writing the clip).
+- Polling: checks for new recordings every 60 seconds.
+- Motion-triggered: re-checks a channel after motion ends, accounting for
+  Reolink's post-motion recording extension and hub finalization delay.
 - One download at a time via an asyncio queue.
 - Disk limit: oldest recordings are deleted when the limit would be exceeded.
+- Frame extraction: full-size and thumbnail JPEGs are created for each recording.
+
+The Lovelace card (dragontree-reolink-playback) is served automatically from
+the integration package and registered as a Lovelace resource on first setup.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import uuid
+from pathlib import Path
 
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
 
 from .api import async_register_ws_commands
 from .const import DOMAIN
@@ -27,6 +36,37 @@ from .coordinator import ReolinkDownloadCoordinator
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = ["number", "sensor"]
+
+# URL at which the bundled Lovelace card is served
+_CARD_URL = f"/{DOMAIN}/cards.js"
+_CARD_PATH = Path(__file__).parent / "resources" / "cards" / "dragontree-reolink-cards.js"
+
+
+def _integration_version() -> str:
+    """Read the version from manifest.json."""
+    try:
+        manifest = json.loads((Path(__file__).parent / "manifest.json").read_text())
+        return manifest.get("version", "0.0.0")
+    except Exception:
+        return "0.0.0"
+
+
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Register the bundled Lovelace card as a static HTTP path.
+
+    This runs once when HA loads the integration domain, before any config
+    entries are set up.
+    """
+    if _CARD_PATH.exists():
+        await hass.http.async_register_static_paths(
+            [StaticPathConfig(_CARD_URL, str(_CARD_PATH), cache_headers=True)]
+        )
+        _LOGGER.debug("Registered static path %s → %s", _CARD_URL, _CARD_PATH)
+    else:
+        _LOGGER.warning(
+            "Card file not found at %s — Lovelace card will not be available", _CARD_PATH
+        )
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -39,10 +79,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await coordinator.async_initialize()
 
-    # Register WS commands once; safe to call on each reload
+    # Register WS commands; safe to call on each reload
     async_register_ws_commands(hass)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Auto-register the Lovelace resource so no manual step is needed
+    await _ensure_lovelace_resource(hass, _integration_version())
 
     # Re-run initialisation when options change (max_disk_gb / stream)
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
@@ -63,3 +106,40 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Handle options update — reload the entry to apply new settings."""
     await hass.config_entries.async_reload(entry.entry_id)
+
+
+async def _ensure_lovelace_resource(hass: HomeAssistant, version: str) -> None:
+    """Add or update the Lovelace card resource in .storage/lovelace_resources.
+
+    - On first install: adds the resource entry.
+    - On version update: updates the URL so the browser fetches the new file.
+    - Migrates any old resource URL (e.g. /local/dragontree-reolink-cards.js).
+    - No-ops if already up to date.
+
+    Takes effect on the next browser reload (or full HA restart in some configs).
+    """
+    resource_url = f"{_CARD_URL}?v={version}"
+    store = Store(hass, 1, "lovelace_resources", minor_version=1)
+    data = await store.async_load()
+
+    if data is None:
+        # File doesn't exist — Lovelace is probably in YAML resource mode.
+        _LOGGER.info(
+            "Lovelace resource store not found (YAML mode?). "
+            "Add this resource manually: %s  type: module",
+            resource_url,
+        )
+        return
+
+    items: list[dict] = data.get("items", [])
+
+    # Remove any previous entries for this card (handles URL migrations)
+    items = [
+        i for i in items
+        if not ("dragontree" in i.get("url", "") and "reolink" in i.get("url", ""))
+    ]
+
+    items.append({"id": uuid.uuid4().hex, "url": resource_url, "type": "module"})
+    await store.async_save({"items": items})
+
+    _LOGGER.info("Lovelace card resource registered: %s", resource_url)
