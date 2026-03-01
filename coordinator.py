@@ -291,7 +291,7 @@ class ReolinkDownloadCoordinator:
         self._total_bytes = sum(e["size"] for e in self._files)
         _last_dl_str = raw_last_check.pop("_last_download", None)
         self._last_download = (
-            dt.datetime.fromisoformat(_last_dl_str).replace(tzinfo=None)
+            dt.datetime.fromisoformat(_last_dl_str)
             if _last_dl_str
             else None
         )
@@ -502,7 +502,7 @@ class ReolinkDownloadCoordinator:
             await self._queue_initial_downloads()
             return
 
-        catchup_from = self._last_download
+        catchup_from = self._last_download.replace(tzinfo=None)
         LOGGER.info("Startup catchup: queuing recordings since %s", catchup_from.isoformat())
 
         for config_entry in self.hass.config_entries.async_loaded_entries(REOLINK_DOMAIN):

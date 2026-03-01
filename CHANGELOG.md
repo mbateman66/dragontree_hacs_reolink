@@ -4,6 +4,13 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.2.3] - 2026-03-01
+
+### Fixed
+- Fixed `ValueError: Invalid datetime ... missing timezone information` crash on the
+  `last_download` sensor — `_load_from_db` was stripping the timezone from the stored
+  timestamp; `SensorDeviceClass.TIMESTAMP` requires a timezone-aware datetime.
+
 ## [1.2.2] - 2026-03-01
 
 ### Added
