@@ -4,6 +4,14 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.2.1] - 2026-03-01
+
+### Changed
+- Playback list: time of day is now displayed above the tag badges (right column),
+  at normal font size/weight; date and duration remain in the left info column
+- Prev/Next navigation buttons (and auto-advance on playback end) now always move
+  backward/forward in time regardless of the current sort order
+
 ## [1.2.0] - 2026-03-01
 
 ### Changed

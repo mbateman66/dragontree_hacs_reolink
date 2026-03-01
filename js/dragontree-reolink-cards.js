@@ -17,16 +17,20 @@ function toLocalIso(date) {
          `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
-/** Format an ISO datetime string for display (e.g. "Feb 27 · 11:02 AM"). */
-function formatDateTime(isoStr) {
+/** Format an ISO datetime string as a date only (e.g. "Feb 27"). */
+function formatDate(isoStr) {
   if (!isoStr) return '';
-  // DB stores naive local-time strings; appending no timezone means JS
-  // parses them as local time (ECMAScript 2015+ behaviour for full datetime strings).
   const d = new Date(isoStr);
   if (isNaN(d)) return isoStr;
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) +
-         ' · ' +
-         d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+/** Format an ISO datetime string as a time only (e.g. "11:02 AM"). */
+function formatTime(isoStr) {
+  if (!isoStr) return '';
+  const d = new Date(isoStr);
+  if (isNaN(d)) return '';
+  return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 }
 
 /** Format duration in seconds as "1m 23s" or "45s". */
@@ -264,7 +268,19 @@ const STYLE = `
     border-radius: 3px;
     background: var(--secondary-background-color, #eee);
   }
-  .rec-tags { display: flex; gap: 4px; flex-shrink: 0; }
+  .rec-right {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+  .rec-time-of-day {
+    font-size: 1em;
+    color: var(--primary-text-color, #212121);
+    white-space: nowrap;
+  }
+  .rec-tags { display: flex; gap: 4px; }
   .tag {
     font-size: 0.65em;
     padding: 2px 5px;
@@ -429,12 +445,13 @@ class DragontreeReolinkPlayback extends HTMLElement {
     sr.getElementById('btnApply').addEventListener('click', () => this._applyFilters());
 
     sr.getElementById('btnPrev').addEventListener('click', () => {
-      if (this._selectedIndex > 0) this._selectRecording(this._selectedIndex - 1);
+      const i = this._olderIndex();
+      if (i !== -1) this._selectRecording(i);
     });
 
     sr.getElementById('btnNext').addEventListener('click', () => {
-      if (this._selectedIndex < this._recordings.length - 1)
-        this._selectRecording(this._selectedIndex + 1);
+      const i = this._newerIndex();
+      if (i !== -1) this._selectRecording(i);
     });
   }
 
@@ -527,9 +544,12 @@ class DragontreeReolinkPlayback extends HTMLElement {
           ${thumbHtml}
           <div class="rec-info">
             <div class="rec-camera">${this._escHtml(rec.camera)}</div>
-            <div class="rec-time">${formatDateTime(rec.start_time)}${rec.duration_s ? ' &middot; ' + formatDuration(rec.duration_s) : ''}</div>
+            <div class="rec-time">${formatDate(rec.start_time)}${rec.duration_s ? ' &middot; ' + formatDuration(rec.duration_s) : ''}</div>
           </div>
-          <div class="rec-tags">${tagBadges}</div>
+          <div class="rec-right">
+            <div class="rec-time-of-day">${formatTime(rec.start_time)}</div>
+            <div class="rec-tags">${tagBadges}</div>
+          </div>
         </div>
       `;
     }).join('');
@@ -577,10 +597,26 @@ class DragontreeReolinkPlayback extends HTMLElement {
     if (!wrapper) return;
     wrapper.innerHTML = `<video controls autoplay playsinline src="${url}"></video>`;
     wrapper.querySelector('video').addEventListener('ended', () => {
-      // Auto-advance to next recording when playback ends
-      if (this._selectedIndex < this._recordings.length - 1)
-        this._selectRecording(this._selectedIndex + 1);
+      // Auto-advance forward in time when playback ends
+      const i = this._newerIndex();
+      if (i !== -1) this._selectRecording(i);
     });
+  }
+
+  // ── Time-direction helpers ────────────────────────────────────────────────
+
+  /** Index of the next-older recording, or -1 if none. */
+  _olderIndex() {
+    if (this._selectedIndex < 0) return -1;
+    const i = this._filters.sortDesc ? this._selectedIndex + 1 : this._selectedIndex - 1;
+    return (i >= 0 && i < this._recordings.length) ? i : -1;
+  }
+
+  /** Index of the next-newer recording, or -1 if none. */
+  _newerIndex() {
+    if (this._selectedIndex < 0) return -1;
+    const i = this._filters.sortDesc ? this._selectedIndex - 1 : this._selectedIndex + 1;
+    return (i >= 0 && i < this._recordings.length) ? i : -1;
   }
 
   _updateNavButtons() {
@@ -588,8 +624,8 @@ class DragontreeReolinkPlayback extends HTMLElement {
     const prev = sr.getElementById('btnPrev');
     const next = sr.getElementById('btnNext');
     if (!prev || !next) return;
-    prev.disabled = this._selectedIndex <= 0;
-    next.disabled = this._selectedIndex < 0 || this._selectedIndex >= this._recordings.length - 1;
+    prev.disabled = this._olderIndex() === -1;
+    next.disabled = this._newerIndex() === -1;
   }
 
   // ── Thumbnail resolution ──────────────────────────────────────────────────
