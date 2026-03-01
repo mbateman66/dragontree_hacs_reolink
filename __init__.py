@@ -52,14 +52,11 @@ _JS_DIR = Path(__file__).parent / "js"
 _DASHBOARD_URL = "dragontree-reolink"
 _DASHBOARD_YAML = f"custom_components/{DOMAIN}/lovelace/ui-lovelace.yaml"
 
-
-def _integration_version() -> str:
-    """Read the version from manifest.json."""
-    try:
-        manifest = json.loads((Path(__file__).parent / "manifest.json").read_text())
-        return manifest.get("version", "0.0.0")
-    except Exception:
-        return "0.0.0"
+# Read version once at import time — manifest.json is static while HA is running.
+try:
+    _VERSION = json.loads((Path(__file__).parent / "manifest.json").read_text()).get("version", "0.0.0")
+except Exception:
+    _VERSION = "0.0.0"
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
@@ -142,8 +139,7 @@ def _register_frontend(hass: HomeAssistant) -> None:
     add_extra_js_url injects the URL into every Lovelace page load — equivalent
     to a resources entry but done entirely at runtime, no storage file needed.
     """
-    version = _integration_version()
-    url = f"{_JS_URL_BASE}/dragontree-reolink-cards.js?v={version}"
+    url = f"{_JS_URL_BASE}/dragontree-reolink-cards.js?v={_VERSION}"
     add_extra_js_url(hass, url)
     LOGGER.debug("Registered Lovelace card module: %s", url)
 
