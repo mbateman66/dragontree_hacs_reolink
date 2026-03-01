@@ -240,7 +240,7 @@ const STYLE = `
   .rec-item.selected { background: var(--primary-color-light, #e3f2fd); }
   .rec-info { flex: 1; min-width: 0; }
   .rec-camera {
-    font-size: 0.84em;
+    font-size: 0.92em;
     font-weight: 500;
     color: var(--primary-text-color, #212121);
     white-space: nowrap;
@@ -276,7 +276,8 @@ const STYLE = `
     flex-shrink: 0;
   }
   .rec-time-of-day {
-    font-size: 1em;
+    font-size: 0.92em;
+    font-weight: normal;
     color: var(--primary-text-color, #212121);
     white-space: nowrap;
   }
