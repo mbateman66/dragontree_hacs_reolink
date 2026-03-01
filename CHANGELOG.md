@@ -11,6 +11,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   no page refresh required. Uses an HA event bus subscription so the list
   refreshes in real time while preserving the currently selected recording.
 
+### Changed
+- Camera name font size increased slightly; time-of-day now matches that size
+  at normal weight so it reads lighter than the camera name.
+
+### Fixed
+- Eliminated "blocking call" warning in HA logs — manifest.json is now read
+  once at module import time instead of inside the async event loop.
+
 ## [1.2.1] - 2026-03-01
 
 ### Changed
