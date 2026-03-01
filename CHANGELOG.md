@@ -4,6 +4,23 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-03-01
+
+### Changed
+- Dashboard is now registered automatically in the HA sidebar — no `configuration.yaml`
+  edits required. Uses `LovelaceYAML` + `_register_panel` to serve the bundled YAML
+  directly from the integration package.
+- Lovelace card JS is now registered via `add_extra_js_url` instead of the
+  `.storage/lovelace_resources` file. Any stale resource entries are cleaned up
+  automatically on first run after upgrading.
+- Added `"dependencies": ["lovelace", "http", "frontend"]` to `manifest.json` to
+  guarantee these HA subsystems are ready before setup.
+- Dashboard and JS files are now organised into `lovelace/` and `js/` subdirectories.
+
+### Removed
+- Dashboard file copy and persistent notification on first install (superseded by
+  automatic dashboard registration).
+
 ## [1.0.1] - 2026-03-01
 
 ### Fixed

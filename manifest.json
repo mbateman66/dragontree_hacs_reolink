@@ -3,9 +3,9 @@
   "name": "Dragontree Reolink",
   "codeowners": [],
   "config_flow": true,
-  "dependencies": ["reolink"],
+  "dependencies": ["lovelace", "http", "frontend", "reolink"],
   "documentation": "",
   "iot_class": "local_polling",
   "requirements": ["av>=10.0.0"],
-  "version": "1.0.1"
+  "version": "1.1.0"
 }

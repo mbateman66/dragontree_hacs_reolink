@@ -11,6 +11,7 @@ local media storage, with a built-in Lovelace recording browser.
 - AI trigger metadata stored per recording (ANIMAL, VEHICLE, PERSON)
 - Full-size and thumbnail JPEG extracted from each recording
 - Disk space limit — oldest recordings deleted automatically when limit is hit
+- **Cameras dashboard registered automatically** in the HA sidebar — no `configuration.yaml` edits
 - Lovelace recording browser with video player, filters, and thumbnail list
 
 ## Requirements
@@ -37,28 +38,10 @@ Configure:
 - **Max disk space** — maximum GB to use for recordings (default: 5 GB)
 - **Stream** — `main` (full quality) or `sub` (lower quality, smaller files)
 
-### 2. Add the Cameras dashboard
+After restarting, the **Cameras** entry appears automatically in the HA sidebar.
+No `configuration.yaml` changes are needed.
 
-After the first restart the integration copies the dashboard YAML to
-`dashboards/dragontree_reolink_cameras.yaml` in your config directory and
-creates a **persistent notification** in the HA UI with the exact snippet to
-add to `configuration.yaml`:
-
-```yaml
-lovelace:
-  dashboards:
-    cameras-yaml:
-      mode: yaml
-      title: Cameras
-      icon: mdi:cctv
-      filename: dashboards/dragontree_reolink_cameras.yaml
-      show_in_sidebar: true
-```
-
-Restart Home Assistant after adding this entry. The dashboard file will not be
-overwritten on future updates, so any customisations you make are preserved.
-
-### 3. Allow media directory access
+### 2. Allow media directory access
 
 In `configuration.yaml`:
 
@@ -68,7 +51,20 @@ homeassistant:
     - "/media"
 ```
 
-Restart Home Assistant after making configuration changes.
+Restart Home Assistant after making this change.
+
+### Upgrading from v1.0.x
+
+If you previously added a `cameras-yaml` entry to `configuration.yaml`, remove it
+— the dashboard is now registered automatically by the integration:
+
+```yaml
+# Remove this block from configuration.yaml:
+lovelace:
+  dashboards:
+    cameras-yaml:
+      ...
+```
 
 ## Releasing a new version
 

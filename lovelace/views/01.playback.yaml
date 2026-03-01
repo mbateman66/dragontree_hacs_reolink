@@ -1,0 +1,9 @@
+##########################################################################
+# VIEW: Recording Playback
+##########################################################################
+- title: Recording Playback
+  path: playback
+  icon: mdi:play-circle
+  panel: true
+  cards:
+    - type: custom:dragontree-reolink-playback

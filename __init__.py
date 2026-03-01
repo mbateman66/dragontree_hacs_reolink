@@ -14,19 +14,20 @@ Key behaviour:
 - Frame extraction: full-size and thumbnail JPEGs are created for each recording.
 
 The Lovelace card (dragontree-reolink-playback) is served automatically from
-the integration package and registered as a Lovelace resource on first setup.
+the integration package and registered as a frontend module on first setup.
+The Cameras dashboard is registered in the HA sidebar automatically.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import shutil
-import uuid
 from pathlib import Path
 
+from homeassistant.components.frontend import add_extra_js_url, async_remove_panel
 from homeassistant.components.http import StaticPathConfig
-from homeassistant.components.persistent_notification import async_create as pn_create
+from homeassistant.components.lovelace import _register_panel
+from homeassistant.components.lovelace.dashboard import LovelaceYAML
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
@@ -39,9 +40,13 @@ _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = ["number", "sensor"]
 
-# URL at which the bundled Lovelace card is served
-_CARD_URL = f"/{DOMAIN}/cards.js"
-_CARD_PATH = Path(__file__).parent / "resources" / "cards" / "dragontree-reolink-cards.js"
+# URL path where the bundled JS directory is served
+_JS_URL_BASE = f"/{DOMAIN}/js"
+_JS_DIR = Path(__file__).parent / "js"
+
+# Lovelace dashboard slug and YAML path (relative to HA config dir)
+_DASHBOARD_URL = "dragontree-reolink"
+_DASHBOARD_YAML = f"custom_components/{DOMAIN}/lovelace/ui-lovelace.yaml"
 
 
 def _integration_version() -> str:
@@ -54,19 +59,20 @@ def _integration_version() -> str:
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    """Register the bundled Lovelace card as a static HTTP path.
+    """Serve the bundled JS directory as a static HTTP path.
 
     This runs once when HA loads the integration domain, before any config
     entries are set up.
     """
-    if _CARD_PATH.exists():
+    if _JS_DIR.exists():
         await hass.http.async_register_static_paths(
-            [StaticPathConfig(_CARD_URL, str(_CARD_PATH), cache_headers=True)]
+            [StaticPathConfig(_JS_URL_BASE, str(_JS_DIR), cache_headers=True)]
         )
-        _LOGGER.debug("Registered static path %s → %s", _CARD_URL, _CARD_PATH)
+        _LOGGER.debug("Registered static path %s → %s", _JS_URL_BASE, _JS_DIR)
     else:
         _LOGGER.warning(
-            "Card file not found at %s — Lovelace card will not be available", _CARD_PATH
+            "JS directory not found at %s — Lovelace card will not be available",
+            _JS_DIR,
         )
     return True
 
@@ -86,11 +92,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # Auto-register the Lovelace resource so no manual step is needed
-    await _ensure_lovelace_resource(hass, _integration_version())
+    # Register the Lovelace card JS module
+    _register_frontend(hass)
 
-    # Copy dashboard YAML to config dir and notify user on first install
-    await _ensure_dashboard_file(hass)
+    # Register the Cameras dashboard in the HA sidebar
+    _register_dashboard(hass)
+
+    # One-time migration: remove stale /local/* entries from lovelace_resources store
+    await _cleanup_old_lovelace_resource(hass)
 
     # Re-run initialisation when options change (max_disk_gb / stream)
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
@@ -108,93 +117,82 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Remove the dashboard panel when the integration is deleted."""
+    try:
+        async_remove_panel(hass, _DASHBOARD_URL)
+    except Exception:
+        pass
+    lovelace = hass.data.get("lovelace")
+    if lovelace is not None:
+        lovelace.dashboards.pop(_DASHBOARD_URL, None)
+
+
 async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Handle options update — reload the entry to apply new settings."""
     await hass.config_entries.async_reload(entry.entry_id)
 
 
-async def _ensure_lovelace_resource(hass: HomeAssistant, version: str) -> None:
-    """Add or update the Lovelace card resource in .storage/lovelace_resources.
+def _register_frontend(hass: HomeAssistant) -> None:
+    """Register the bundled Lovelace card JS as a frontend module.
 
-    - On first install: adds the resource entry.
-    - On version update: updates the URL so the browser fetches the new file.
-    - Migrates any old resource URL (e.g. /local/dragontree-reolink-cards.js).
-    - No-ops if already up to date.
-
-    Takes effect on the next browser reload (or full HA restart in some configs).
+    add_extra_js_url injects the URL into every Lovelace page load — equivalent
+    to a resources entry but done entirely at runtime, no storage file needed.
     """
-    resource_url = f"{_CARD_URL}?v={version}"
+    version = _integration_version()
+    url = f"{_JS_URL_BASE}/dragontree-reolink-cards.js?v={version}"
+    add_extra_js_url(hass, url)
+    _LOGGER.debug("Registered Lovelace card module: %s", url)
+
+
+def _register_dashboard(hass: HomeAssistant) -> None:
+    """Register the Cameras YAML dashboard in the HA sidebar.
+
+    Uses LovelaceYAML to point directly at the bundled YAML inside the
+    integration package — no file copying required.  _register_panel with
+    update=False is a no-op if the panel is already registered, so this is
+    safe to call on every entry reload.
+    """
+    lovelace = hass.data.get("lovelace")
+    if lovelace is None:
+        _LOGGER.warning("Lovelace not initialised — Cameras dashboard not registered")
+        return
+
+    config = {
+        "mode": "yaml",
+        "icon": "mdi:cctv",
+        "title": "Cameras",
+        "filename": _DASHBOARD_YAML,
+        "show_in_sidebar": True,
+        "require_admin": False,
+    }
+
+    lovelace.dashboards[_DASHBOARD_URL] = LovelaceYAML(hass, _DASHBOARD_URL, config)
+    _register_panel(hass, _DASHBOARD_URL, "yaml", config, False)
+    _LOGGER.info("Cameras dashboard registered at /%s", _DASHBOARD_URL)
+
+
+async def _cleanup_old_lovelace_resource(hass: HomeAssistant) -> None:
+    """Remove stale /local/* resource entries for this integration.
+
+    Previous versions stored the card URL in .storage/lovelace_resources.
+    That approach is replaced by add_extra_js_url — this function removes
+    any leftover entries on the first run after upgrading.
+    """
     store = Store(hass, 1, "lovelace_resources", minor_version=1)
     data = await store.async_load()
-
     if data is None:
-        # File doesn't exist — Lovelace is probably in YAML resource mode.
-        _LOGGER.info(
-            "Lovelace resource store not found (YAML mode?). "
-            "Add this resource manually: %s  type: module",
-            resource_url,
-        )
         return
 
     items: list[dict] = data.get("items", [])
-
-    # Remove any previous entries for this card (handles URL migrations)
-    items = [
+    cleaned = [
         i for i in items
         if not ("dragontree" in i.get("url", "") and "reolink" in i.get("url", ""))
     ]
-
-    items.append({"id": uuid.uuid4().hex, "url": resource_url, "type": "module"})
-    await store.async_save({"items": items})
-
-    _LOGGER.info("Lovelace card resource registered: %s", resource_url)
-
-
-# Destination path relative to the HA config directory
-_DASHBOARD_DST = "dashboards/dragontree_reolink_cameras.yaml"
-
-_DASHBOARD_NOTIFICATION = """\
-The Dragontree Reolink dashboard has been copied to `{dst}`.
-
-Add the following to your `configuration.yaml` and restart Home Assistant:
-
-```yaml
-lovelace:
-  dashboards:
-    cameras-yaml:
-      mode: yaml
-      title: Cameras
-      icon: mdi:cctv
-      filename: {dst}
-      show_in_sidebar: true
-```
-"""
-
-
-async def _ensure_dashboard_file(hass: HomeAssistant) -> None:
-    """Copy the bundled dashboard YAML to the HA config directory.
-
-    Only runs on first install (skips if the destination already exists so user
-    customisations are never overwritten).  Creates a persistent notification
-    with the exact configuration.yaml snippet the user needs to add.
-    """
-    src = Path(__file__).parent / "resources" / "dashboards" / "cameras.yaml"
-    dst = Path(hass.config.config_dir) / _DASHBOARD_DST
-
-    if dst.exists():
-        return
-
-    try:
-        await hass.async_add_executor_job(dst.parent.mkdir, 0o755, True, True)
-        await hass.async_add_executor_job(shutil.copy, str(src), str(dst))
-    except Exception as err:
-        _LOGGER.warning("Could not copy dashboard YAML: %s", err)
-        return
-
-    _LOGGER.info("Dashboard YAML copied to %s", dst)
-    pn_create(
-        hass,
-        message=_DASHBOARD_NOTIFICATION.format(dst=_DASHBOARD_DST),
-        title="Dragontree Reolink — Dashboard Setup Required",
-        notification_id=f"{DOMAIN}_dashboard_setup",
-    )
+    if len(cleaned) != len(items):
+        await store.async_save({"items": cleaned})
+        _LOGGER.info(
+            "Removed %d stale lovelace_resources entry(s) for %s",
+            len(items) - len(cleaned),
+            DOMAIN,
+        )
