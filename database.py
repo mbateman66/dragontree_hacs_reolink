@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import logging
-
 import aiosqlite
 
-_LOGGER = logging.getLogger(__name__)
+from .const import LOGGER
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS recordings (
@@ -52,10 +50,10 @@ class RecordingsDB:
                     f"ALTER TABLE recordings ADD COLUMN {col} TEXT"
                 )
                 await self._conn.commit()
-                _LOGGER.info("Migrated DB: added column %s", col)
+                LOGGER.info("Migrated DB: added column %s", col)
             except Exception:
                 pass  # Column already exists
-        _LOGGER.info("Recordings database ready: %s", self._db_path)
+        LOGGER.info("Recordings database ready: %s", self._db_path)
 
     async def async_close(self) -> None:
         """Close the database connection."""

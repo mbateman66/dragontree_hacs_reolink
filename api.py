@@ -2,20 +2,19 @@
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING
 
 import voluptuous as vol
 
 from homeassistant.components import websocket_api
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import callback
 
-from .const import DOMAIN, MEDIA_BASE_DIR
+from .const import DOMAIN, LOGGER, MEDIA_BASE_DIR
 
 if TYPE_CHECKING:
-    from .coordinator import ReolinkDownloadCoordinator
+    from homeassistant.core import HomeAssistant
 
-_LOGGER = logging.getLogger(__name__)
+    from .data import DragontreeReolinkData
 
 # /media/ is two levels above MEDIA_BASE_DIR: /media/Dragontree/Reolink → /media/
 _MEDIA_ROOT = "/media/"
@@ -56,15 +55,15 @@ async def ws_get_recordings(
     msg: dict,
 ) -> None:
     """Return recordings matching the given filters."""
-    coordinator: ReolinkDownloadCoordinator = hass.data.get(DOMAIN)
-    if coordinator is None:
+    runtime_data: DragontreeReolinkData | None = hass.data.get(DOMAIN)
+    if runtime_data is None:
         connection.send_error(msg["id"], "not_ready", "Coordinator not available")
         return
 
     cameras = msg.get("cameras") or None
     triggers = msg.get("triggers") or None
 
-    rows = await coordinator._db.query(
+    rows = await runtime_data.coordinator._db.query(
         cameras=cameras,
         triggers=triggers,
         start_dt=msg.get("start_dt"),
@@ -91,10 +90,10 @@ async def ws_get_cameras(
     msg: dict,
 ) -> None:
     """Return all distinct camera names known to the database."""
-    coordinator: ReolinkDownloadCoordinator = hass.data.get(DOMAIN)
-    if coordinator is None:
+    runtime_data: DragontreeReolinkData | None = hass.data.get(DOMAIN)
+    if runtime_data is None:
         connection.send_error(msg["id"], "not_ready", "Coordinator not available")
         return
 
-    cameras = await coordinator._db.get_distinct_cameras()
+    cameras = await runtime_data.coordinator._db.get_distinct_cameras()
     connection.send_result(msg["id"], {"cameras": cameras})

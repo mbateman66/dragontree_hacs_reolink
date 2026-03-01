@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import io
 import json
-import logging
 import os
 import re
 from typing import Any
-
-import io
 
 import aiofiles
 from reolink_aio.enums import VodRequestType
@@ -35,6 +33,7 @@ from .const import (
     DEFAULT_STREAM,
     INIT_LOOKBACK_DAYS,
     INIT_RECORDINGS_PER_CAMERA,
+    LOGGER,
     MEDIA_BASE_DIR,
     MOTION_END_DELAY,
     MOTION_START_FALLBACK_DELAY,
@@ -44,8 +43,6 @@ from .const import (
     SIGNAL_UPDATE,
 )
 from .database import RecordingsDB
-
-_LOGGER = logging.getLogger(__name__)
 
 
 def _sanitize(name: str) -> str:
@@ -110,7 +107,7 @@ def _extract_frames_sync(
         import av  # noqa: PLC0415
         from PIL import Image  # noqa: PLC0415
     except ImportError:
-        _LOGGER.warning(
+        LOGGER.warning(
             "av or Pillow not installed — frame extraction disabled. "
             "Ensure the integration is reloaded after HA finishes installing requirements."
         )
@@ -146,7 +143,7 @@ def _extract_frames_sync(
 
                 return full_buf.getvalue(), thumb_buf.getvalue()
     except Exception as err:
-        _LOGGER.debug("Frame extraction failed for %s: %s", file_path, err)
+        LOGGER.debug("Frame extraction failed for %s: %s", file_path, err)
 
     return None, None
 
@@ -286,7 +283,7 @@ class ReolinkDownloadCoordinator:
                 existing.append({"path": entry["path"], "camera": entry["camera"],
                                   "size": entry["file_size"], "downloaded_at": entry["downloaded_at"]})
             else:
-                _LOGGER.debug("Dropping missing file from tracking: %s", entry["path"])
+                LOGGER.debug("Dropping missing file from tracking: %s", entry["path"])
                 await self._db.delete(entry["path"])
 
         self._files = existing  # already ordered oldest-first by DB query
@@ -302,7 +299,7 @@ class ReolinkDownloadCoordinator:
             for k, v in raw_last_check.items()
         }
 
-        _LOGGER.info(
+        LOGGER.info(
             "Loaded %d tracked recordings (%.2f GB used)",
             len(self._files),
             self._total_bytes / 1024**3,
@@ -343,10 +340,10 @@ class ReolinkDownloadCoordinator:
                         break
 
         if not channel_map:
-            _LOGGER.warning("No Reolink motion sensors found — relying on poll only")
+            LOGGER.warning("No Reolink motion sensors found — relying on poll only")
             return
 
-        _LOGGER.info("Subscribed to motion sensors: %s", list(channel_map.keys()))
+        LOGGER.info("Subscribed to motion sensors: %s", list(channel_map.keys()))
 
         @callback
         def _on_motion_state_change(event: Any) -> None:
@@ -361,11 +358,11 @@ class ReolinkDownloadCoordinator:
 
             if new_state.state == "on" and old_state.state != "on":
                 self._motion_active.add(key)
-                _LOGGER.debug("Motion started ch%s (%s) — fallback in %ds", channel, entity_id, MOTION_START_FALLBACK_DELAY)
+                LOGGER.debug("Motion started ch%s (%s) — fallback in %ds", channel, entity_id, MOTION_START_FALLBACK_DELAY)
                 self._schedule_channel_check(entry_id, channel, delay=MOTION_START_FALLBACK_DELAY)
             elif new_state.state == "off" and old_state.state == "on":
                 self._motion_active.discard(key)
-                _LOGGER.debug("Motion ended ch%s (%s) — check in %ds", channel, entity_id, MOTION_END_DELAY)
+                LOGGER.debug("Motion ended ch%s (%s) — check in %ds", channel, entity_id, MOTION_END_DELAY)
                 self._schedule_channel_check(entry_id, channel, delay=MOTION_END_DELAY)
 
         unsub = async_track_state_change_event(
@@ -411,7 +408,7 @@ class ReolinkDownloadCoordinator:
                 # Restart the worker if it died unexpectedly (not via cancellation)
                 if self._worker_task and self._worker_task.done():
                     exc = self._worker_task.exception() if not self._worker_task.cancelled() else None
-                    _LOGGER.warning(
+                    LOGGER.warning(
                         "Download worker task exited unexpectedly (exc=%s) — restarting", exc
                     )
                     self._worker_task = self.hass.async_create_background_task(
@@ -421,7 +418,7 @@ class ReolinkDownloadCoordinator:
             except asyncio.CancelledError:
                 break
             except Exception as err:
-                _LOGGER.error("Unexpected error in polling loop: %s", err)
+                LOGGER.error("Unexpected error in polling loop: %s", err)
 
     async def _check_all_channels(self) -> None:
         for config_entry in self.hass.config_entries.async_loaded_entries(REOLINK_DOMAIN):
@@ -459,7 +456,7 @@ class ReolinkDownloadCoordinator:
                 channel, query_from, now, status_only=True, stream=self.stream
             )
         except Exception as err:
-            _LOGGER.warning(
+            LOGGER.warning(
                 "Failed to list recording days for %s ch%s: %s",
                 host.api.nvr_name, channel, err,
             )
@@ -476,7 +473,7 @@ class ReolinkDownloadCoordinator:
                         channel, day_start, day_end, stream=self.stream
                     )
                 except Exception as err:
-                    _LOGGER.warning(
+                    LOGGER.warning(
                         "Failed to list files for ch%s %d/%02d/%02d: %s",
                         channel, status.year, status.month, day, err,
                     )
@@ -500,12 +497,12 @@ class ReolinkDownloadCoordinator:
         Falls back to count-based seeding on a fresh install (no last_download).
         """
         if self._last_download is None:
-            _LOGGER.info("No last_download recorded — running initial seed")
+            LOGGER.info("No last_download recorded — running initial seed")
             await self._queue_initial_downloads()
             return
 
         catchup_from = self._last_download
-        _LOGGER.info("Startup catchup: queuing recordings since %s", catchup_from.isoformat())
+        LOGGER.info("Startup catchup: queuing recordings since %s", catchup_from.isoformat())
 
         for config_entry in self.hass.config_entries.async_loaded_entries(REOLINK_DOMAIN):
             try:
@@ -521,7 +518,7 @@ class ReolinkDownloadCoordinator:
                         channel, catchup_from, now, status_only=True, stream=self.stream
                     )
                 except Exception as err:
-                    _LOGGER.warning(
+                    LOGGER.warning(
                         "Startup catchup: failed to list days for %s ch%s: %s",
                         host.api.camera_name(channel), channel, err,
                     )
@@ -537,7 +534,7 @@ class ReolinkDownloadCoordinator:
                                 channel, day_start, day_end, stream=self.stream
                             )
                         except Exception as err:
-                            _LOGGER.warning(
+                            LOGGER.warning(
                                 "Startup catchup: failed to list files for ch%s %d/%02d/%02d: %s",
                                 channel, status.year, status.month, day, err,
                             )
@@ -583,7 +580,7 @@ class ReolinkDownloadCoordinator:
                 channel, start, now, status_only=True, stream=self.stream
             )
         except Exception as err:
-            _LOGGER.warning(
+            LOGGER.warning(
                 "Failed to list recording days for %s ch%s: %s",
                 cam_name, channel, err,
             )
@@ -598,7 +595,7 @@ class ReolinkDownloadCoordinator:
             reverse=True,
         )
 
-        _LOGGER.info(
+        LOGGER.info(
             "ch%s '%s': %d recording day(s) found", channel, cam_name, len(day_list)
         )
 
@@ -613,7 +610,7 @@ class ReolinkDownloadCoordinator:
                     channel, day_start, day_end, stream=self.stream
                 )
             except Exception as err:
-                _LOGGER.warning(
+                LOGGER.warning(
                     "Failed to list files for ch%s %d/%02d/%02d: %s",
                     channel, year, month, day, err,
                 )
@@ -643,7 +640,7 @@ class ReolinkDownloadCoordinator:
         # real end time) will be picked up on the next poll.
         m = _FILENAME_TIME_RE.search(os.path.basename(vod_file.file_name))
         if m and m.group(3) == "000000":
-            _LOGGER.debug("Skipping in-progress recording: %s", vod_file.file_name)
+            LOGGER.debug("Skipping in-progress recording: %s", vod_file.file_name)
             return False
 
         file_path = self._make_file_path(host, channel, vod_file)
@@ -672,7 +669,7 @@ class ReolinkDownloadCoordinator:
 
         self._queued_paths.add(file_path)
         await self._queue.put((host, channel, entry_id, vod_file, file_path))
-        _LOGGER.debug(
+        LOGGER.debug(
             "Queued: %s ch%s → %s (depth %d)",
             host.api.camera_name(channel), channel,
             os.path.basename(file_path), self._queue.qsize(),
@@ -693,7 +690,7 @@ class ReolinkDownloadCoordinator:
                 try:
                     await self._download_file(host, channel, vod_file, file_path)
                 except Exception as err:
-                    _LOGGER.error(
+                    LOGGER.error(
                         "Download failed for %s: %s", os.path.basename(file_path), err
                     )
                 finally:
@@ -702,7 +699,7 @@ class ReolinkDownloadCoordinator:
             except asyncio.CancelledError:
                 break
             except Exception as err:
-                _LOGGER.error("Unexpected error in download worker: %s", err)
+                LOGGER.error("Unexpected error in download worker: %s", err)
 
     async def _download_file(
         self, host: Any, channel: int, vod_file: Any, file_path: str
@@ -721,7 +718,7 @@ class ReolinkDownloadCoordinator:
                 channel, filename, self.stream, vod_type
             )
         except Exception as err:
-            _LOGGER.warning("Failed to get VOD URL for %s: %s", filename, err)
+            LOGGER.warning("Failed to get VOD URL for %s: %s", filename, err)
             return
 
         dir_path = os.path.dirname(file_path)
@@ -741,7 +738,7 @@ class ReolinkDownloadCoordinator:
                 timeout=ClientTimeout(total=300, connect=30, sock_connect=30, sock_read=120),
             ) as resp:
                 if resp.status != 200:
-                    _LOGGER.warning("HTTP %s fetching %s — skipping", resp.status, filename)
+                    LOGGER.warning("HTTP %s fetching %s — skipping", resp.status, filename)
                     return
                 async with aiofiles.open(tmp_path, "wb") as fh:
                     async for chunk in resp.content.iter_chunked(65536):
@@ -751,12 +748,12 @@ class ReolinkDownloadCoordinator:
             await self._remove_tmp(tmp_path)
             raise
         except Exception as err:
-            _LOGGER.warning("Error downloading %s: %s", filename, err)
+            LOGGER.warning("Error downloading %s: %s", filename, err)
             await self._remove_tmp(tmp_path)
             return
 
         if total_size == 0:
-            _LOGGER.warning("Empty response for %s — skipping", filename)
+            LOGGER.warning("Empty response for %s — skipping", filename)
             await self._remove_tmp(tmp_path)
             return
 
@@ -793,7 +790,7 @@ class ReolinkDownloadCoordinator:
         )
         self._notify_sensors()
 
-        _LOGGER.info(
+        LOGGER.info(
             "Saved %s (%.1f MB) — total %.2f / %.2f GB",
             os.path.basename(file_path),
             total_size / 1024**2,
@@ -817,11 +814,11 @@ class ReolinkDownloadCoordinator:
             self._total_bytes -= size
             try:
                 await self.hass.async_add_executor_job(os.remove, path)
-                _LOGGER.info("Deleted oldest recording to free space: %s", os.path.basename(path))
+                LOGGER.info("Deleted oldest recording to free space: %s", os.path.basename(path))
             except FileNotFoundError:
                 pass
             except OSError as err:
-                _LOGGER.warning("Could not delete %s: %s", path, err)
+                LOGGER.warning("Could not delete %s: %s", path, err)
             # Also remove associated image files
             base = os.path.splitext(path)[0]
             for suffix in ("_full.jpg", "_thumb.jpg"):
@@ -835,7 +832,7 @@ class ReolinkDownloadCoordinator:
             await self._db.delete(path)
 
         if self._total_bytes + needed_bytes > self.max_disk_bytes:
-            _LOGGER.warning(
+            LOGGER.warning(
                 "Disk limit (%.2f GB) cannot fully accommodate a %.1f MB recording",
                 self.max_disk_bytes / 1024**3, needed_bytes / 1024**2,
             )
@@ -949,7 +946,7 @@ class ReolinkDownloadCoordinator:
         rows = await self._db.get_files_without_thumbnails()
         if not rows:
             return
-        _LOGGER.info("Generating thumbnails for %d existing recordings", len(rows))
+        LOGGER.info("Generating thumbnails for %d existing recordings", len(rows))
         for row in rows:
             file_path = row["path"]
             exists = await self.hass.async_add_executor_job(os.path.exists, file_path)
@@ -962,7 +959,7 @@ class ReolinkDownloadCoordinator:
                 await self._db.update_image_paths(file_path, image_path, thumb_path)
             # Yield control between files so we don't hog the event loop
             await asyncio.sleep(0.1)
-        _LOGGER.info("Thumbnail backfill complete")
+        LOGGER.info("Thumbnail backfill complete")
 
     def _notify_sensors(self) -> None:
         """Push an update signal so sensors refresh their state."""

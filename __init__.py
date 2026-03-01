@@ -21,24 +21,28 @@ The Cameras dashboard is registered in the HA sidebar automatically.
 from __future__ import annotations
 
 import json
-import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from homeassistant.components.frontend import add_extra_js_url, async_remove_panel
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.components.lovelace import _register_panel
 from homeassistant.components.lovelace.dashboard import LovelaceYAML
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.const import Platform
 from homeassistant.helpers.storage import Store
 
 from .api import async_register_ws_commands
-from .const import DOMAIN
+from .const import DOMAIN, LOGGER
 from .coordinator import ReolinkDownloadCoordinator
+from .data import DragontreeReolinkData
 
-_LOGGER = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from homeassistant.config_entries import ConfigEntry
+    from homeassistant.core import HomeAssistant
 
-PLATFORMS = ["number", "sensor"]
+    from .data import DragontreeReolinkConfigEntry
+
+PLATFORMS: list[Platform] = [Platform.NUMBER, Platform.SENSOR]
 
 # URL path where the bundled JS directory is served
 _JS_URL_BASE = f"/{DOMAIN}/js"
@@ -68,22 +72,22 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         await hass.http.async_register_static_paths(
             [StaticPathConfig(_JS_URL_BASE, str(_JS_DIR), cache_headers=True)]
         )
-        _LOGGER.debug("Registered static path %s → %s", _JS_URL_BASE, _JS_DIR)
+        LOGGER.debug("Registered static path %s → %s", _JS_URL_BASE, _JS_DIR)
     else:
-        _LOGGER.warning(
+        LOGGER.warning(
             "JS directory not found at %s — Lovelace card will not be available",
             _JS_DIR,
         )
     return True
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_setup_entry(hass: HomeAssistant, entry: DragontreeReolinkConfigEntry) -> bool:
     """Set up Dragontree Reolink from a config entry."""
     coordinator = ReolinkDownloadCoordinator(hass, entry)
-    entry.runtime_data = coordinator
+    entry.runtime_data = DragontreeReolinkData(coordinator=coordinator)
 
-    # Store coordinator for WebSocket API access (single-entry integration)
-    hass.data[DOMAIN] = coordinator
+    # Store runtime_data for WebSocket API access (WS handlers receive hass, not entry)
+    hass.data[DOMAIN] = entry.runtime_data
 
     await coordinator.async_initialize()
 
@@ -107,17 +111,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_unload_entry(hass: HomeAssistant, entry: DragontreeReolinkConfigEntry) -> bool:
     """Unload a config entry."""
-    coordinator: ReolinkDownloadCoordinator = entry.runtime_data
-    await coordinator.async_unload()
+    await entry.runtime_data.coordinator.async_unload()
 
     hass.data.pop(DOMAIN, None)
 
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 
-async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+async def async_remove_entry(hass: HomeAssistant, entry: DragontreeReolinkConfigEntry) -> None:
     """Remove the dashboard panel when the integration is deleted."""
     try:
         async_remove_panel(hass, _DASHBOARD_URL)
@@ -128,7 +131,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         lovelace.dashboards.pop(_DASHBOARD_URL, None)
 
 
-async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+async def _async_options_updated(hass: HomeAssistant, entry: DragontreeReolinkConfigEntry) -> None:
     """Handle options update — reload the entry to apply new settings."""
     await hass.config_entries.async_reload(entry.entry_id)
 
@@ -142,7 +145,7 @@ def _register_frontend(hass: HomeAssistant) -> None:
     version = _integration_version()
     url = f"{_JS_URL_BASE}/dragontree-reolink-cards.js?v={version}"
     add_extra_js_url(hass, url)
-    _LOGGER.debug("Registered Lovelace card module: %s", url)
+    LOGGER.debug("Registered Lovelace card module: %s", url)
 
 
 def _register_dashboard(hass: HomeAssistant) -> None:
@@ -155,7 +158,7 @@ def _register_dashboard(hass: HomeAssistant) -> None:
     """
     lovelace = hass.data.get("lovelace")
     if lovelace is None:
-        _LOGGER.warning("Lovelace not initialised — Cameras dashboard not registered")
+        LOGGER.warning("Lovelace not initialised — Cameras dashboard not registered")
         return
 
     config = {
@@ -169,7 +172,7 @@ def _register_dashboard(hass: HomeAssistant) -> None:
 
     lovelace.dashboards[_DASHBOARD_URL] = LovelaceYAML(hass, _DASHBOARD_URL, config)
     _register_panel(hass, _DASHBOARD_URL, "yaml", config, False)
-    _LOGGER.info("Cameras dashboard registered at /%s", _DASHBOARD_URL)
+    LOGGER.info("Cameras dashboard registered at /%s", _DASHBOARD_URL)
 
 
 async def _cleanup_old_lovelace_resource(hass: HomeAssistant) -> None:
@@ -191,7 +194,7 @@ async def _cleanup_old_lovelace_resource(hass: HomeAssistant) -> None:
     ]
     if len(cleaned) != len(items):
         await store.async_save({"items": cleaned})
-        _LOGGER.info(
+        LOGGER.info(
             "Removed %d stale lovelace_resources entry(s) for %s",
             len(items) - len(cleaned),
             DOMAIN,

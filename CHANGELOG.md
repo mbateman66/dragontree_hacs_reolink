@@ -4,6 +4,24 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-03-01
+
+### Changed
+- Refactored to follow the official HA integration blueprint conventions:
+  - `data.py` — new `DragontreeReolinkData` dataclass + typed `DragontreeReolinkConfigEntry`
+    alias (`ConfigEntry[DragontreeReolinkData]`); `entry.runtime_data` is now typed
+  - `entity.py` — new `DragontreeReolinkEntity` base class; deduplicates `device_info`,
+    `has_entity_name`, `should_poll`, and dispatcher wiring across all platforms
+  - `const.py` — `LOGGER` via `getLogger(__package__)`; all modules now import this
+    single logger instead of creating per-module `_LOGGER` instances
+  - `sensor.py` / `number.py` — use typed config entry, access coordinator via
+    `entry.runtime_data.coordinator`, extend `DragontreeReolinkEntity`
+  - `config_flow.py` — `ConfigFlowResult` return type; `selector.NumberSelector` and
+    `selector.SelectSelector` for form fields; modern `OptionsFlow` pattern (no custom
+    `__init__`, accesses `self.config_entry` directly)
+  - `Platform` enum used in `PLATFORMS` list; `HomeAssistant` imported under
+    `TYPE_CHECKING` throughout
+
 ## [1.1.0] - 2026-03-01
 
 ### Changed

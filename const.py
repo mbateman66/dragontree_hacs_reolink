@@ -1,5 +1,9 @@
 """Constants for dragontree_reolink."""
 
+from logging import Logger, getLogger
+
+LOGGER: Logger = getLogger(__package__)
+
 DOMAIN = "dragontree_reolink"
 REOLINK_DOMAIN = "reolink"
 
