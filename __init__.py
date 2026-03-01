@@ -21,10 +21,12 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import uuid
 from pathlib import Path
 
 from homeassistant.components.http import StaticPathConfig
+from homeassistant.components.persistent_notification import async_create as pn_create
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
@@ -87,6 +89,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Auto-register the Lovelace resource so no manual step is needed
     await _ensure_lovelace_resource(hass, _integration_version())
 
+    # Copy dashboard YAML to config dir and notify user on first install
+    await _ensure_dashboard_file(hass)
+
     # Re-run initialisation when options change (max_disk_gb / stream)
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
 
@@ -143,3 +148,53 @@ async def _ensure_lovelace_resource(hass: HomeAssistant, version: str) -> None:
     await store.async_save({"items": items})
 
     _LOGGER.info("Lovelace card resource registered: %s", resource_url)
+
+
+# Destination path relative to the HA config directory
+_DASHBOARD_DST = "dashboards/dragontree_reolink_cameras.yaml"
+
+_DASHBOARD_NOTIFICATION = """\
+The Dragontree Reolink dashboard has been copied to `{dst}`.
+
+Add the following to your `configuration.yaml` and restart Home Assistant:
+
+```yaml
+lovelace:
+  dashboards:
+    cameras-yaml:
+      mode: yaml
+      title: Cameras
+      icon: mdi:cctv
+      filename: {dst}
+      show_in_sidebar: true
+```
+"""
+
+
+async def _ensure_dashboard_file(hass: HomeAssistant) -> None:
+    """Copy the bundled dashboard YAML to the HA config directory.
+
+    Only runs on first install (skips if the destination already exists so user
+    customisations are never overwritten).  Creates a persistent notification
+    with the exact configuration.yaml snippet the user needs to add.
+    """
+    src = Path(__file__).parent / "resources" / "dashboards" / "cameras.yaml"
+    dst = Path(hass.config.config_dir) / _DASHBOARD_DST
+
+    if dst.exists():
+        return
+
+    try:
+        await hass.async_add_executor_job(dst.parent.mkdir, 0o755, True, True)
+        await hass.async_add_executor_job(shutil.copy, str(src), str(dst))
+    except Exception as err:
+        _LOGGER.warning("Could not copy dashboard YAML: %s", err)
+        return
+
+    _LOGGER.info("Dashboard YAML copied to %s", dst)
+    pn_create(
+        hass,
+        message=_DASHBOARD_NOTIFICATION.format(dst=_DASHBOARD_DST),
+        title="Dragontree Reolink — Dashboard Setup Required",
+        notification_id=f"{DOMAIN}_dashboard_setup",
+    )

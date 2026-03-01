@@ -39,9 +39,10 @@ Configure:
 
 ### 2. Add the Cameras dashboard
 
-The Lovelace card and WebSocket API are registered automatically on startup.
-The dashboard YAML is provided in `resources/dashboards/cameras.yaml`.
-Add it to your `configuration.yaml`:
+After the first restart the integration copies the dashboard YAML to
+`dashboards/dragontree_reolink_cameras.yaml` in your config directory and
+creates a **persistent notification** in the HA UI with the exact snippet to
+add to `configuration.yaml`:
 
 ```yaml
 lovelace:
@@ -50,9 +51,12 @@ lovelace:
       mode: yaml
       title: Cameras
       icon: mdi:cctv
-      filename: <path_to>/cameras.yaml
+      filename: dashboards/dragontree_reolink_cameras.yaml
       show_in_sidebar: true
 ```
+
+Restart Home Assistant after adding this entry. The dashboard file will not be
+overwritten on future updates, so any customisations you make are preserved.
 
 ### 3. Allow media directory access
 

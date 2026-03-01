@@ -4,6 +4,13 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] - 2026-03-01
+
+### Fixed
+- Dashboard YAML is now automatically copied to `dashboards/dragontree_reolink_cameras.yaml`
+  in the HA config directory on first setup, and a persistent notification provides the exact
+  `configuration.yaml` snippet to add — no manual file-path hunting after a HACS install
+
 ## [1.0.0] - 2026-02-28
 
 ### Added
