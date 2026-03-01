@@ -248,12 +248,11 @@ class ReolinkDownloadCoordinator:
             self._backfill_thumbnails(), name="dragontree_reolink_thumb_backfill"
         )
 
-        # Only seed recordings on a truly fresh install (no existing DB entries).
-        # On restarts, the polling loop will catch anything missed since last run.
-        if not self._files:
-            self.hass.async_create_background_task(
-                self._queue_initial_downloads(), name="dragontree_reolink_init"
-            )
+        # On startup, sweep the hub for recordings missed since last_download.
+        # Falls back to count-based seed on a fresh install.
+        self.hass.async_create_background_task(
+            self._queue_startup_catchup(), name="dragontree_reolink_init"
+        )
 
     async def async_unload(self) -> None:
         """Cancel all background tasks and unsubscribe dispatchers."""
@@ -292,6 +291,12 @@ class ReolinkDownloadCoordinator:
 
         self._files = existing  # already ordered oldest-first by DB query
         self._total_bytes = sum(e["size"] for e in self._files)
+        _last_dl_str = raw_last_check.pop("_last_download", None)
+        self._last_download = (
+            dt.datetime.fromisoformat(_last_dl_str).replace(tzinfo=None)
+            if _last_dl_str
+            else None
+        )
         self._last_check = {
             k: dt.datetime.fromisoformat(v).replace(tzinfo=None)
             for k, v in raw_last_check.items()
@@ -403,6 +408,15 @@ class ReolinkDownloadCoordinator:
         while True:
             try:
                 await asyncio.sleep(POLL_INTERVAL)
+                # Restart the worker if it died unexpectedly (not via cancellation)
+                if self._worker_task and self._worker_task.done():
+                    exc = self._worker_task.exception() if not self._worker_task.cancelled() else None
+                    _LOGGER.warning(
+                        "Download worker task exited unexpectedly (exc=%s) — restarting", exc
+                    )
+                    self._worker_task = self.hass.async_create_background_task(
+                        self._download_worker(), name="dragontree_reolink_worker"
+                    )
                 await self._check_all_channels()
             except asyncio.CancelledError:
                 break
@@ -478,6 +492,62 @@ class ReolinkDownloadCoordinator:
     # ------------------------------------------------------------------ #
     # Initial downloads                                                    #
     # ------------------------------------------------------------------ #
+
+    async def _queue_startup_catchup(self) -> None:
+        """Queue recordings missed since the last successful download.
+
+        If last_download is known, sweeps every channel from that time to now.
+        Falls back to count-based seeding on a fresh install (no last_download).
+        """
+        if self._last_download is None:
+            _LOGGER.info("No last_download recorded — running initial seed")
+            await self._queue_initial_downloads()
+            return
+
+        catchup_from = self._last_download
+        _LOGGER.info("Startup catchup: queuing recordings since %s", catchup_from.isoformat())
+
+        for config_entry in self.hass.config_entries.async_loaded_entries(REOLINK_DOMAIN):
+            try:
+                host = config_entry.runtime_data.host
+            except AttributeError:
+                continue
+            for channel in host.api.channels:
+                if not self._channel_has_replay(host, channel):
+                    continue
+                now = self._camera_now(host)
+                try:
+                    statuses, _ = await host.api.request_vod_files(
+                        channel, catchup_from, now, status_only=True, stream=self.stream
+                    )
+                except Exception as err:
+                    _LOGGER.warning(
+                        "Startup catchup: failed to list days for %s ch%s: %s",
+                        host.api.camera_name(channel), channel, err,
+                    )
+                    continue
+                for status in statuses:
+                    for day in status.days:
+                        day_start = dt.datetime(status.year, status.month, day, 0, 0, 0)
+                        day_end = dt.datetime(status.year, status.month, day, 23, 59, 59)
+                        if day_end < catchup_from:
+                            continue
+                        try:
+                            _, vod_files = await host.api.request_vod_files(
+                                channel, day_start, day_end, stream=self.stream
+                            )
+                        except Exception as err:
+                            _LOGGER.warning(
+                                "Startup catchup: failed to list files for ch%s %d/%02d/%02d: %s",
+                                channel, status.year, status.month, day, err,
+                            )
+                            continue
+                        for vod_file in vod_files:
+                            vod_start = vod_file.start_time.replace(tzinfo=None)
+                            if vod_start >= catchup_from:
+                                await self._maybe_enqueue(
+                                    host, channel, config_entry.entry_id, vod_file
+                                )
 
     async def _queue_initial_downloads(self) -> None:
         """Queue the N most recent recordings from every available camera."""
@@ -668,7 +738,7 @@ class ReolinkDownloadCoordinator:
         try:
             async with session.get(
                 url,
-                timeout=ClientTimeout(total=None, connect=30, sock_connect=30, sock_read=120),
+                timeout=ClientTimeout(total=300, connect=30, sock_connect=30, sock_read=120),
             ) as resp:
                 if resp.status != 200:
                     _LOGGER.warning("HTTP %s fetching %s — skipping", resp.status, filename)
@@ -702,6 +772,7 @@ class ReolinkDownloadCoordinator:
         })
         self._total_bytes += total_size
         self._last_download = downloaded_at
+        await self._db.upsert_last_check("_last_download", downloaded_at.isoformat())
 
         # Extract frames for thumbnail and full-size image
         _start = getattr(vod_file, "start_time", None)
