@@ -31,6 +31,7 @@ from .const import (
     DB_PATH,
     DEFAULT_MAX_DISK_GB,
     DEFAULT_STREAM,
+    EVENT_RECORDING_ADDED,
     INIT_LOOKBACK_DAYS,
     INIT_RECORDINGS_PER_CAMERA,
     LOGGER,
@@ -789,6 +790,7 @@ class ReolinkDownloadCoordinator:
             )
         )
         self._notify_sensors()
+        self.hass.bus.async_fire(EVENT_RECORDING_ADDED)
 
         LOGGER.info(
             "Saved %s (%.1f MB) — total %.2f / %.2f GB",

@@ -356,6 +356,14 @@ class DragontreeReolinkPlayback extends HTMLElement {
     this._initialized = false;
     this._filters = this._defaultFilters();
     this._thumbCache = new Map(); // content_id → resolved URL
+    this._unsubRecordingEvents = null;
+  }
+
+  disconnectedCallback() {
+    if (this._unsubRecordingEvents) {
+      this._unsubRecordingEvents();
+      this._unsubRecordingEvents = null;
+    }
   }
 
   // ── Lovelace lifecycle ────────────────────────────────────────────────────
@@ -382,7 +390,10 @@ class DragontreeReolinkPlayback extends HTMLElement {
     this._loadCameras().then(() => {
       this._renderFilterInputs();
       return this._loadRecordings();
-    }).then(() => this._renderList());
+    }).then(() => {
+      this._renderList();
+      this._subscribeRecordingEvents();
+    });
   }
 
   // ── Default filter state ──────────────────────────────────────────────────
@@ -397,6 +408,29 @@ class DragontreeReolinkPlayback extends HTMLElement {
       triggers: [],   // empty = no tag filter
       sortDesc: true,
     };
+  }
+
+  // ── Live update subscription ──────────────────────────────────────────────
+
+  _subscribeRecordingEvents() {
+    if (this._unsubRecordingEvents) return;
+    this._hass.connection.subscribeEvents(
+      () => this._refreshRecordings(),
+      'dragontree_reolink_recording_added'
+    ).then(unsub => { this._unsubRecordingEvents = unsub; });
+  }
+
+  async _refreshRecordings() {
+    // Preserve the selected recording across the refresh by content_id so that
+    // new recordings inserted above/below the current position don't shift it.
+    const selectedCid = this._selectedIndex >= 0
+      ? (this._recordings[this._selectedIndex] || {}).content_id
+      : null;
+    await this._loadRecordings();
+    if (selectedCid) {
+      this._selectedIndex = this._recordings.findIndex(r => r.content_id === selectedCid);
+    }
+    this._renderList();
   }
 
   // ── Data fetching ─────────────────────────────────────────────────────────

@@ -4,6 +4,13 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.2.2] - 2026-03-01
+
+### Added
+- Playback list updates automatically when new recordings finish downloading —
+  no page refresh required. Uses an HA event bus subscription so the list
+  refreshes in real time while preserving the currently selected recording.
+
 ## [1.2.1] - 2026-03-01
 
 ### Changed

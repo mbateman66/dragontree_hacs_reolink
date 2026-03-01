@@ -40,3 +40,7 @@ INIT_LOOKBACK_DAYS = 30
 
 # Dispatcher signal for sensor updates
 SIGNAL_UPDATE = f"{DOMAIN}_update"
+
+# HA event bus event fired when a recording is fully downloaded and saved to DB.
+# Subscribed to by the Lovelace card for live list updates.
+EVENT_RECORDING_ADDED = f"{DOMAIN}_recording_added"
