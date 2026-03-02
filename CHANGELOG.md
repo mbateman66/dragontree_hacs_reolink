@@ -4,6 +4,16 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.2.4] - 2026-03-02
+
+### Fixed
+- Lovelace card JS is now registered via Lovelace's `ResourceStorageCollection` API
+  instead of `add_extra_js_url`. This keeps the in-memory resource collection, the
+  storage file, and all connected clients in sync via WebSocket push — previously the
+  card could fail to load after a fresh install without a full browser reload.
+- Any stale `/local/*` resource entries written by earlier versions are cleaned up
+  automatically on first run after upgrading.
+
 ## [1.2.3] - 2026-03-01
 
 ### Fixed
