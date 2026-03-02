@@ -92,21 +92,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: DragontreeReolinkConfigE
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # Register the Lovelace card JS in lovelace_resources (Lovelace waits for these before rendering)
-    await _ensure_lovelace_resource(hass)
+    try:
+        # Register the Lovelace card JS in lovelace_resources (Lovelace waits for these before rendering)
+        await _ensure_lovelace_resource(hass)
 
-    # Register the Cameras dashboard in the HA sidebar
-    _register_dashboard(hass)
+        # Register the Cameras dashboard in the HA sidebar
+        _register_dashboard(hass)
 
-    # Re-run initialisation when options change (max_disk_gb / stream)
-    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
+        # Re-run initialisation when options change (max_disk_gb / stream)
+        entry.async_on_unload(entry.add_update_listener(_async_options_updated))
+    except Exception:
+        # If post-platform setup fails, tear down the platforms we already set up
+        # so that a subsequent reload doesn't hit "already been setup" errors.
+        await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+        hass.data.pop(DOMAIN, None)
+        raise
 
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: DragontreeReolinkConfigEntry) -> bool:
     """Unload a config entry."""
-    await entry.runtime_data.coordinator.async_unload()
+    runtime_data = getattr(entry, "runtime_data", None)
+    if runtime_data is not None:
+        await runtime_data.coordinator.async_unload()
 
     hass.data.pop(DOMAIN, None)
 
@@ -169,8 +178,8 @@ def _register_dashboard(hass: HomeAssistant) -> None:
 
     Uses LovelaceYAML to point directly at the bundled YAML inside the
     integration package — no file copying required.  _register_panel with
-    update=False is a no-op if the panel is already registered, so this is
-    safe to call on every entry reload.
+    update=True overwrites any existing registration, making this safe to
+    call on every entry reload without raising ValueError.
     """
     lovelace = hass.data.get("lovelace")
     if lovelace is None:
@@ -187,7 +196,7 @@ def _register_dashboard(hass: HomeAssistant) -> None:
     }
 
     lovelace.dashboards[_DASHBOARD_URL] = LovelaceYAML(hass, _DASHBOARD_URL, config)
-    _register_panel(hass, _DASHBOARD_URL, "yaml", config, False)
+    _register_panel(hass, _DASHBOARD_URL, "yaml", config, True)
     LOGGER.info("Cameras dashboard registered at /%s", _DASHBOARD_URL)
 
 

@@ -4,6 +4,16 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.2.5] - 2026-03-02
+
+### Fixed
+- Dashboard panel registration now uses `update=True` so the integration can be
+  reloaded without crashing with `ValueError: Overwriting panel`.
+- If post-platform setup fails, platforms are now torn down immediately so a
+  subsequent reload does not encounter "already been setup" errors.
+- `async_unload_entry` is now fully defensive and handles being called on a
+  partially-loaded entry where `runtime_data` was never assigned.
+
 ## [1.2.4] - 2026-03-02
 
 ### Fixed

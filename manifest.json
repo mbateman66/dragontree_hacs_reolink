@@ -7,5 +7,5 @@
   "documentation": "",
   "iot_class": "local_polling",
   "requirements": ["av>=10.0.0"],
-  "version": "1.2.4"
+  "version": "1.2.5"
 }
