@@ -4,6 +4,16 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.2.7] - 2026-03-02
+
+### Fixed
+- On iPhone portrait mode the entire page scrolled instead of just the recording
+  list, causing the media player and filter panel to scroll off-screen. The mobile
+  layout now constrains the card to the viewport height (`100dvh - 56px`) and uses
+  `grid-template-rows: auto 1fr` so the right panel fills remaining space. The video
+  wrapper gains `aspect-ratio: 16/9` so the player panel has a natural height without
+  requiring a flex parent constraint.
+
 ## [1.2.6] - 2026-03-02
 
 ### Added

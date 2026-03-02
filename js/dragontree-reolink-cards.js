@@ -62,7 +62,16 @@ const STYLE = `
     min-height: 420px;
   }
   @media (max-width: 800px) {
-    .container { grid-template-columns: 1fr; height: auto; }
+    .container {
+      grid-template-columns: 1fr;
+      grid-template-rows: auto 1fr;
+      height: calc(100dvh - 56px); /* 56px = HA header height */
+      min-height: 400px;
+    }
+    .video-wrapper {
+      aspect-ratio: 16 / 9;
+      flex: none; /* size from aspect-ratio, not flex */
+    }
   }
 
   /* ── Player ── */
