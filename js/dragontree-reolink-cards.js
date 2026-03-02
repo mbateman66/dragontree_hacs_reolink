@@ -162,21 +162,6 @@ const STYLE = `
     text-transform: uppercase;
     letter-spacing: 0.06em;
   }
-  .datetime-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 6px;
-  }
-  input[type="datetime-local"] {
-    width: 100%;
-    box-sizing: border-box;
-    padding: 5px 7px;
-    border: 1px solid var(--divider-color, #ddd);
-    border-radius: 4px;
-    font-size: 0.8em;
-    background: var(--card-background-color, #fff);
-    color: var(--primary-text-color, #212121);
-  }
   .checkbox-group {
     display: flex;
     flex-wrap: wrap;
@@ -190,27 +175,6 @@ const STYLE = `
     cursor: pointer;
     color: var(--primary-text-color, #212121);
   }
-  .radio-group { display: flex; gap: 14px; }
-  .rb-item {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 0.84em;
-    cursor: pointer;
-    color: var(--primary-text-color, #212121);
-  }
-  .filter-apply {
-    align-self: flex-end;
-    padding: 6px 18px;
-    background: var(--primary-color, #03a9f4);
-    color: #fff;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 0.84em;
-  }
-  .filter-apply:hover { opacity: 0.88; }
-
   /* ── Recording list ── */
   .list-panel {
     flex: 1;
@@ -292,6 +256,15 @@ const STYLE = `
   .tag-ANIMAL  { background: #e8f5e9; color: #2e7d32; }
   .tag-VEHICLE { background: #e3f2fd; color: #1565c0; }
   .tag-PERSON  { background: #fff3e0; color: #e65100; }
+
+  /* ── Load-more footer ── */
+  .list-footer {
+    text-align: center;
+    padding: 12px;
+    color: var(--secondary-text-color, #888);
+    font-size: 0.8em;
+    min-height: 8px;
+  }
 `;
 
 const TEMPLATE = `
@@ -315,13 +288,6 @@ const TEMPLATE = `
           <span class="arrow">&#9660;</span>
         </div>
         <div class="filter-body" id="filterBody">
-          <div>
-            <span class="fg-label">Date Range</span>
-            <div class="datetime-row">
-              <input type="datetime-local" id="dtStart" />
-              <input type="datetime-local" id="dtEnd" />
-            </div>
-          </div>
           <div id="cameraGroup">
             <span class="fg-label">Cameras</span>
             <div class="checkbox-group" id="cameraChecks"></div>
@@ -330,11 +296,6 @@ const TEMPLATE = `
             <span class="fg-label">Tags</span>
             <div class="checkbox-group" id="tagChecks"></div>
           </div>
-          <div>
-            <span class="fg-label">Sort</span>
-            <div class="radio-group" id="sortGroup"></div>
-          </div>
-          <button class="filter-apply" id="btnApply">Apply</button>
         </div>
       </div>
 
@@ -346,6 +307,10 @@ const TEMPLATE = `
 `;
 
 class DragontreeReolinkPlayback extends HTMLElement {
+  static _STORAGE_KEY = 'dragontree_reolink_playback_state';
+  static _HA_USER_KEY  = 'dragontree_reolink_filters';
+  static _PAGE_SIZE    = 50;
+
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
@@ -358,6 +323,59 @@ class DragontreeReolinkPlayback extends HTMLElement {
     this._filters = this._defaultFilters();
     this._thumbCache = new Map(); // content_id → resolved URL
     this._unsubRecordingEvents = null;
+    this._hasMore = true;
+    this._loadingMore = false;
+  }
+
+  _saveFilters() {
+    const payload = { filters: this._filters, filtersOpen: this._filtersOpen };
+    // Fast local cache for instant UI restore
+    try {
+      sessionStorage.setItem(DragontreeReolinkPlayback._STORAGE_KEY, JSON.stringify(payload));
+    } catch { /* sessionStorage unavailable */ }
+    // Persistent per-user server storage (fire-and-forget)
+    this._hass && this._hass.callWS({
+      type: 'frontend/set_user_data',
+      key: DragontreeReolinkPlayback._HA_USER_KEY,
+      value: payload,
+    }).catch(() => {});
+  }
+
+  /** Instant restore from sessionStorage (synchronous, used in _build before DOM paints). */
+  _restoreFilters() {
+    try {
+      const raw = sessionStorage.getItem(DragontreeReolinkPlayback._STORAGE_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw);
+      if (saved.filters) this._filters = { ...this._defaultFilters(), ...saved.filters };
+      if (saved.filtersOpen !== undefined) this._filtersOpen = !!saved.filtersOpen;
+    } catch { /* ignore corrupt or unavailable storage */ }
+  }
+
+  /** Load authoritative filters from HA user data (async, called before first data fetch). */
+  async _loadUserFilters() {
+    try {
+      const result = await this._hass.callWS({
+        type: 'frontend/get_user_data',
+        key: DragontreeReolinkPlayback._HA_USER_KEY,
+      });
+      if (!result || !result.value) return;
+      const saved = result.value;
+      if (saved.filters) this._filters = { ...this._defaultFilters(), ...saved.filters };
+      if (saved.filtersOpen !== undefined) this._filtersOpen = !!saved.filtersOpen;
+      // Sync the authoritative value back to sessionStorage
+      try {
+        sessionStorage.setItem(DragontreeReolinkPlayback._STORAGE_KEY, JSON.stringify(saved));
+      } catch {}
+    } catch { /* HA user data not available, keep sessionStorage values */ }
+  }
+
+  _applyFilterPanelState() {
+    const sr = this.shadowRoot;
+    const toggle = sr.getElementById('filterToggle');
+    const body   = sr.getElementById('filterBody');
+    if (toggle) toggle.classList.toggle('open', this._filtersOpen);
+    if (body)   body.classList.toggle('open', this._filtersOpen);
   }
 
   disconnectedCallback() {
@@ -385,10 +403,26 @@ class DragontreeReolinkPlayback extends HTMLElement {
 
   _build() {
     this.shadowRoot.innerHTML = TEMPLATE;
+    this._restoreFilters();        // instant sessionStorage fast-path
     this._bindStaticEvents();
+    this._applyFilterPanelState(); // correct open/closed before any async work
     this._renderFilterInputs();
-    // Load cameras first, then recordings so camera checkboxes are populated
-    this._loadCameras().then(() => {
+
+    // Infinite scroll: load more when near the bottom of the list panel
+    const listPanel = this.shadowRoot.getElementById('listPanel');
+    listPanel.addEventListener('scroll', () => {
+      if (this._loadingMore || !this._hasMore) return;
+      if (listPanel.scrollTop + listPanel.clientHeight >= listPanel.scrollHeight - 250) {
+        this._loadMoreRecordings();
+      }
+    });
+
+    // Load authoritative user filters first so the first recordings query uses them
+    this._loadUserFilters().then(() => {
+      this._applyFilterPanelState();
+      this._renderFilterInputs();
+      return this._loadCameras();
+    }).then(() => {
       this._renderFilterInputs();
       return this._loadRecordings();
     }).then(() => {
@@ -400,14 +434,9 @@ class DragontreeReolinkPlayback extends HTMLElement {
   // ── Default filter state ──────────────────────────────────────────────────
 
   _defaultFilters() {
-    const now = new Date();
-    const yesterday = new Date(now - 24 * 60 * 60 * 1000);
     return {
-      startDt: toLocalIso(yesterday),
-      endDt: toLocalIso(now),
       cameras: [],    // empty = all cameras
       triggers: [],   // empty = no tag filter
-      sortDesc: true,
     };
   }
 
@@ -446,23 +475,64 @@ class DragontreeReolinkPlayback extends HTMLElement {
   }
 
   async _loadRecordings() {
+    this._hasMore = true;
+    this._loadingMore = false;
     const msg = {
       type: 'dragontree_reolink/get_recordings',
-      sort_desc: this._filters.sortDesc,
+      sort_desc: true,
+      limit: DragontreeReolinkPlayback._PAGE_SIZE,
     };
     if (this._filters.cameras.length) msg.cameras = this._filters.cameras;
     if (this._filters.triggers.length) msg.triggers = this._filters.triggers;
-    if (this._filters.startDt) msg.start_dt = this._filters.startDt;
-    if (this._filters.endDt) msg.end_dt = this._filters.endDt;
 
     try {
       const result = await this._hass.callWS(msg);
       this._recordings = result.recordings || [];
-      // Clamp selected index if list shrunk
+      if (this._recordings.length < DragontreeReolinkPlayback._PAGE_SIZE) this._hasMore = false;
       if (this._selectedIndex >= this._recordings.length) this._selectedIndex = -1;
     } catch (e) {
       console.error('[reolink] Failed to load recordings:', e);
       this._recordings = [];
+      this._hasMore = false;
+    }
+  }
+
+  async _loadMoreRecordings() {
+    if (this._loadingMore || !this._hasMore || !this._recordings.length) return;
+    this._loadingMore = true;
+    this._renderListFooter();
+
+    const last = this._recordings[this._recordings.length - 1];
+    const cursor = last.start_time || last.downloaded_at;
+    if (!cursor) {
+      this._hasMore = false;
+      this._loadingMore = false;
+      this._renderListFooter();
+      return;
+    }
+
+    const msg = {
+      type: 'dragontree_reolink/get_recordings',
+      sort_desc: true,
+      limit: DragontreeReolinkPlayback._PAGE_SIZE,
+      before_dt: cursor,
+    };
+    if (this._filters.cameras.length) msg.cameras = this._filters.cameras;
+    if (this._filters.triggers.length) msg.triggers = this._filters.triggers;
+
+    try {
+      const result = await this._hass.callWS(msg);
+      const more = result.recordings || [];
+      const startIndex = this._recordings.length;
+      this._recordings = this._recordings.concat(more);
+      if (more.length < DragontreeReolinkPlayback._PAGE_SIZE) this._hasMore = false;
+      this._loadingMore = false;
+      this._appendToList(more, startIndex);
+    } catch (e) {
+      console.error('[reolink] Failed to load more recordings:', e);
+      this._hasMore = false;
+      this._loadingMore = false;
+      this._renderListFooter();
     }
   }
 
@@ -475,9 +545,10 @@ class DragontreeReolinkPlayback extends HTMLElement {
       this._filtersOpen = !this._filtersOpen;
       sr.getElementById('filterToggle').classList.toggle('open', this._filtersOpen);
       sr.getElementById('filterBody').classList.toggle('open', this._filtersOpen);
+      this._saveFilters();
     });
 
-    sr.getElementById('btnApply').addEventListener('click', () => this._applyFilters());
+    sr.getElementById('filterBody').addEventListener('change', () => this._applyFilters());
 
     sr.getElementById('btnPrev').addEventListener('click', () => {
       const i = this._olderIndex();
@@ -494,11 +565,7 @@ class DragontreeReolinkPlayback extends HTMLElement {
 
   _renderFilterInputs() {
     const sr = this.shadowRoot;
-    if (!sr.getElementById('dtStart')) return; // not built yet
-
-    // Date inputs — datetime-local takes YYYY-MM-DDTHH:MM
-    sr.getElementById('dtStart').value = this._filters.startDt.slice(0, 16);
-    sr.getElementById('dtEnd').value = this._filters.endDt.slice(0, 16);
+    if (!sr.getElementById('cameraChecks')) return; // not built yet
 
     // Camera checkboxes (hidden when there is only one camera)
     const cameraChecks = sr.getElementById('cameraChecks');
@@ -522,39 +589,44 @@ class DragontreeReolinkPlayback extends HTMLElement {
       </label>
     `).join('');
 
-    // Sort radios
-    sr.getElementById('sortGroup').innerHTML = `
-      <label class="rb-item">
-        <input type="radio" name="sort" value="desc"
-               ${this._filters.sortDesc ? 'checked' : ''}>
-        Newest first
-      </label>
-      <label class="rb-item">
-        <input type="radio" name="sort" value="asc"
-               ${!this._filters.sortDesc ? 'checked' : ''}>
-        Oldest first
-      </label>
-    `;
   }
 
   _applyFilters() {
     const sr = this.shadowRoot;
 
-    const startVal = sr.getElementById('dtStart').value;
-    const endVal   = sr.getElementById('dtEnd').value;
-
     this._filters = {
-      startDt: startVal ? startVal + ':00' : null,
-      endDt:   endVal   ? endVal   + ':59' : null,
       cameras: Array.from(sr.querySelectorAll('input[name="camera"]:checked')).map(el => el.value),
       triggers: Array.from(sr.querySelectorAll('input[name="trigger"]:checked')).map(el => el.value),
-      sortDesc: !!(sr.querySelector('input[name="sort"][value="desc"]') || {}).checked,
     };
 
+    this._saveFilters();
     this._loadRecordings().then(() => this._renderList());
   }
 
   // ── Recording list rendering ──────────────────────────────────────────────
+
+  _recItemHTML(rec, i) {
+    const tags = parseTriggers(rec.triggers);
+    const tagBadges = tags.map(t => `<span class="tag tag-${t}">${t}</span>`).join('');
+    const selected = i === this._selectedIndex ? 'selected' : '';
+    const tcid = rec.thumb_content_id ? this._escAttr(rec.thumb_content_id) : '';
+    const thumbHtml = tcid
+      ? `<img class="rec-thumb" data-cid="${tcid}" alt="">`
+      : `<div class="rec-thumb-empty"></div>`;
+    return `
+      <div class="rec-item ${selected}" data-index="${i}">
+        ${thumbHtml}
+        <div class="rec-info">
+          <div class="rec-camera">${this._escHtml(rec.camera)}</div>
+          <div class="rec-time">${formatDate(rec.start_time)}${rec.duration_s ? ' &middot; ' + formatDuration(rec.duration_s) : ''}</div>
+        </div>
+        <div class="rec-right">
+          <div class="rec-time-of-day">${formatTime(rec.start_time)}</div>
+          <div class="rec-tags">${tagBadges}</div>
+        </div>
+      </div>
+    `;
+  }
 
   _renderList() {
     const listPanel = this.shadowRoot.getElementById('listPanel');
@@ -566,28 +638,7 @@ class DragontreeReolinkPlayback extends HTMLElement {
       return;
     }
 
-    listPanel.innerHTML = this._recordings.map((rec, i) => {
-      const tags = parseTriggers(rec.triggers);
-      const tagBadges = tags.map(t => `<span class="tag tag-${t}">${t}</span>`).join('');
-      const selected = i === this._selectedIndex ? 'selected' : '';
-      const tcid = rec.thumb_content_id ? this._escAttr(rec.thumb_content_id) : '';
-      const thumbHtml = tcid
-        ? `<img class="rec-thumb" data-cid="${tcid}" alt="">`
-        : `<div class="rec-thumb-empty"></div>`;
-      return `
-        <div class="rec-item ${selected}" data-index="${i}">
-          ${thumbHtml}
-          <div class="rec-info">
-            <div class="rec-camera">${this._escHtml(rec.camera)}</div>
-            <div class="rec-time">${formatDate(rec.start_time)}${rec.duration_s ? ' &middot; ' + formatDuration(rec.duration_s) : ''}</div>
-          </div>
-          <div class="rec-right">
-            <div class="rec-time-of-day">${formatTime(rec.start_time)}</div>
-            <div class="rec-tags">${tagBadges}</div>
-          </div>
-        </div>
-      `;
-    }).join('');
+    listPanel.innerHTML = this._recordings.map((rec, i) => this._recItemHTML(rec, i)).join('');
 
     listPanel.querySelectorAll('.rec-item').forEach(item => {
       item.addEventListener('click', () =>
@@ -597,6 +648,44 @@ class DragontreeReolinkPlayback extends HTMLElement {
 
     this._updateNavButtons();
     this._resolveThumbnails();
+    this._renderListFooter();
+  }
+
+  _appendToList(items, startIndex) {
+    const listPanel = this.shadowRoot.getElementById('listPanel');
+    if (!listPanel) return;
+
+    // Remove footer before appending so new items land before it
+    listPanel.querySelector('.list-footer')?.remove();
+
+    const frag = document.createDocumentFragment();
+    items.forEach((rec, offset) => {
+      const i = startIndex + offset;
+      const tmp = document.createElement('div');
+      tmp.innerHTML = this._recItemHTML(rec, i);
+      const item = tmp.firstElementChild;
+      item.addEventListener('click', () => this._selectRecording(i));
+      frag.appendChild(item);
+    });
+    listPanel.appendChild(frag);
+
+    this._updateNavButtons();
+    this._resolveThumbnails();
+    this._renderListFooter();
+  }
+
+  _renderListFooter() {
+    const listPanel = this.shadowRoot.getElementById('listPanel');
+    if (!listPanel) return;
+
+    listPanel.querySelector('.list-footer')?.remove();
+
+    if (!this._hasMore) return;
+
+    const footer = document.createElement('div');
+    footer.className = 'list-footer';
+    footer.textContent = this._loadingMore ? 'Loading…' : '';
+    listPanel.appendChild(footer);
   }
 
   // ── Playback ──────────────────────────────────────────────────────────────

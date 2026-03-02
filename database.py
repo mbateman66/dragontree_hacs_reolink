@@ -140,9 +140,18 @@ class RecordingsDB:
         triggers: list[str] | None = None,
         start_dt: str | None = None,
         end_dt: str | None = None,
+        before_dt: str | None = None,
+        after_dt: str | None = None,
         sort_desc: bool = True,
+        limit: int | None = None,
     ) -> list[dict]:
-        """Return recordings matching the given filters."""
+        """Return recordings matching the given filters.
+
+        ``before_dt`` and ``after_dt`` are exclusive cursor bounds used for
+        pagination (based on COALESCE(start_time, downloaded_at)).
+        ``start_dt`` / ``end_dt`` are inclusive range filters on start_time.
+        ``limit`` caps the number of rows returned.
+        """
         clauses: list[str] = []
         params: list = []
 
@@ -159,6 +168,14 @@ class RecordingsDB:
             clauses.append("start_time <= ?")
             params.append(end_dt)
 
+        if before_dt:
+            clauses.append("COALESCE(start_time, downloaded_at) < ?")
+            params.append(before_dt)
+
+        if after_dt:
+            clauses.append("COALESCE(start_time, downloaded_at) > ?")
+            params.append(after_dt)
+
         if triggers:
             # Match recordings that contain at least one of the requested triggers.
             # Triggers are stored as a JSON array e.g. '["ANIMAL","VEHICLE"]'.
@@ -168,6 +185,7 @@ class RecordingsDB:
 
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         order = "DESC" if sort_desc else "ASC"
+        limit_clause = f"LIMIT {int(limit)}" if limit else ""
 
         sql = f"""
             SELECT path, camera, channel, stream, start_time, end_time,
@@ -176,6 +194,7 @@ class RecordingsDB:
             FROM recordings
             {where}
             ORDER BY COALESCE(start_time, downloaded_at) {order}
+            {limit_clause}
         """
 
         async with self._conn.execute(sql, params) as cur:

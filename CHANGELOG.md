@@ -4,6 +4,26 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.2.6] - 2026-03-02
+
+### Added
+- Recording list now lazy-loads: starts with the 50 most recent recordings and
+  fetches the next page automatically when the user scrolls to the end of the list.
+- Filter settings (camera and tag selections, filter panel open/closed state) now
+  persist permanently per HA user account via `frontend/set_user_data` — survive
+  browser closes, device switches, and HA restarts. `sessionStorage` is used as an
+  instant fast-path on load.
+
+### Changed
+- Date range filter removed from the filter panel; the list now always starts from
+  the most recent recordings with no upper/lower bound required.
+- Sort order option removed; list is always newest-first.
+- Filter changes take effect immediately on checkbox toggle — Apply button removed.
+
+### Fixed
+- `database.py` `query()` gained `limit`, `before_dt`, and `after_dt` parameters to
+  support cursor-based pagination without re-fetching already-loaded rows.
+
 ## [1.2.5] - 2026-03-02
 
 ### Fixed

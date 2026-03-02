@@ -45,7 +45,10 @@ def async_register_ws_commands(hass: HomeAssistant) -> None:
         vol.Optional("triggers"): [str],
         vol.Optional("start_dt"): str,
         vol.Optional("end_dt"): str,
+        vol.Optional("before_dt"): str,
+        vol.Optional("after_dt"): str,
         vol.Optional("sort_desc", default=True): bool,
+        vol.Optional("limit"): int,
     }
 )
 @websocket_api.async_response
@@ -68,7 +71,10 @@ async def ws_get_recordings(
         triggers=triggers,
         start_dt=msg.get("start_dt"),
         end_dt=msg.get("end_dt"),
+        before_dt=msg.get("before_dt"),
+        after_dt=msg.get("after_dt"),
         sort_desc=msg.get("sort_desc", True),
+        limit=msg.get("limit"),
     )
 
     # Attach media_source content_ids for URL resolution on the frontend
