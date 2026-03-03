@@ -336,6 +336,9 @@ class DragontreeReolinkPlayback extends HTMLElement {
     this._unsubRecordingEvents = null;
     this._hasMore = true;
     this._loadingMore = false;
+    this._totalRecEntityId = null;  // sensor.dragontree_reolink_total_recordings
+    this._lastTotalRec = null;      // last seen value of the sensor
+    this._refreshTimer = null;      // debounce handle
   }
 
   _saveFilters() {
@@ -403,11 +406,27 @@ class DragontreeReolinkPlayback extends HTMLElement {
   }
 
   set hass(hass) {
+    const prev = this._hass;
     this._hass = hass;
     if (!this._initialized) {
       this._initialized = true;
       this._build();
+      return;
     }
+    // Fallback: detect new downloads by watching total_recordings sensor state.
+    // This fires on every HA state push so we check only the one entity we care about.
+    if (prev && this._totalRecEntityId) {
+      const prevVal = prev.states[this._totalRecEntityId]?.state;
+      const nextVal = hass.states[this._totalRecEntityId]?.state;
+      if (prevVal !== undefined && nextVal !== undefined && nextVal !== prevVal) {
+        this._debouncedRefresh();
+      }
+    }
+  }
+
+  _debouncedRefresh() {
+    clearTimeout(this._refreshTimer);
+    this._refreshTimer = setTimeout(() => this._refreshRecordings(), 1000);
   }
 
   // ── Initialisation ────────────────────────────────────────────────────────
@@ -427,6 +446,11 @@ class DragontreeReolinkPlayback extends HTMLElement {
         this._loadMoreRecordings();
       }
     });
+
+    // Find total_recordings sensor once for the state-change fallback in set hass()
+    this._totalRecEntityId = Object.keys(this._hass.states).find(eid =>
+      eid.includes('dragontree_reolink') && eid.includes('total_recordings')
+    ) || null;
 
     // Load authoritative user filters first so the first recordings query uses them
     this._loadUserFilters().then(() => {
@@ -456,9 +480,13 @@ class DragontreeReolinkPlayback extends HTMLElement {
   _subscribeRecordingEvents() {
     if (this._unsubRecordingEvents) return;
     this._hass.connection.subscribeEvents(
-      () => this._refreshRecordings(),
+      () => this._debouncedRefresh(),
       'dragontree_reolink_recording_added'
-    ).then(unsub => { this._unsubRecordingEvents = unsub; });
+    ).then(unsub => {
+      this._unsubRecordingEvents = unsub;
+    }).catch(err => {
+      console.warn('[reolink] Event subscription failed, relying on state fallback:', err);
+    });
   }
 
   async _refreshRecordings() {
@@ -1041,7 +1069,6 @@ class DragontreeReolinkCamerasCard extends HTMLElement {
   setConfig(config) { this._config = config; }
 
   set hass(hass) {
-    const prev = this._hass;
     this._hass = hass;
     if (!this._initialized) {
       this._initialized = true;

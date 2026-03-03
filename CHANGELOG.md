@@ -4,6 +4,19 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.3.2] - 2026-03-03
+
+### Fixed
+- Playback list now updates in real time when a new recording is downloaded,
+  without requiring a page refresh. Two complementary mechanisms are used:
+  - **State-watching fallback**: `set hass()` compares the `total_recordings`
+    sensor value on each HA state push; when it increases, the list refreshes.
+  - **Event subscription**: subscribes to the `dragontree_reolink_recording_added`
+    HA bus event via WebSocket; now includes `.catch()` so a failed subscription
+    logs a warning instead of failing silently.
+  Both paths converge through a 1-second debounce so a single download triggers
+  exactly one list refresh.
+
 ## [1.3.1] - 2026-03-03
 
 ### Fixed
