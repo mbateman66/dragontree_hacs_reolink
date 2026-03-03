@@ -19,7 +19,8 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import async_track_state_change_event, async_track_time_change
+from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util, slugify
 from homeassistant.util.ssl import SSLCipherList
 
@@ -31,6 +32,7 @@ from .const import (
     DB_PATH,
     DEFAULT_MAX_DISK_GB,
     DEFAULT_STREAM,
+    DOMAIN,
     EVENT_RECORDING_ADDED,
     INIT_LOOKBACK_DAYS,
     INIT_RECORDINGS_PER_CAMERA,
@@ -191,6 +193,11 @@ class ReolinkDownloadCoordinator:
         # Dispatcher unsubscribe callbacks
         self._unsub_dispatchers: list = []
 
+        # Camera schedule
+        self._schedule: dict = {}
+        self._schedule_store: Store | None = None
+        self._schedule_unsubs: list = []
+
     # ------------------------------------------------------------------ #
     # Public properties (read by sensors)                                  #
     # ------------------------------------------------------------------ #
@@ -241,6 +248,15 @@ class ReolinkDownloadCoordinator:
 
         self._subscribe_to_reolink_events()
 
+        # Load and activate camera schedule
+        self._schedule_store = Store(self.hass, 1, f"{DOMAIN}_schedule")
+        self._schedule = await self._schedule_store.async_load() or {}
+        self._setup_schedule_timers()
+        if self._schedule.get("schedule_enabled"):
+            self.hass.async_create_background_task(
+                self._apply_schedule(), name="dragontree_reolink_schedule_apply"
+            )
+
         # Generate thumbnails for recordings that don't have them yet
         self.hass.async_create_background_task(
             self._backfill_thumbnails(), name="dragontree_reolink_thumb_backfill"
@@ -257,6 +273,10 @@ class ReolinkDownloadCoordinator:
         for unsub in self._unsub_dispatchers:
             unsub()
         self._unsub_dispatchers.clear()
+
+        for unsub in self._schedule_unsubs:
+            unsub()
+        self._schedule_unsubs.clear()
 
         for task in list(self._pending_checks.values()):
             task.cancel()
@@ -838,6 +858,239 @@ class ReolinkDownloadCoordinator:
                 "Disk limit (%.2f GB) cannot fully accommodate a %.1f MB recording",
                 self.max_disk_bytes / 1024**3, needed_bytes / 1024**2,
             )
+
+    # ------------------------------------------------------------------ #
+    # Camera schedule                                                      #
+    # ------------------------------------------------------------------ #
+
+    def _find_cam_entities_by_suffix(self, suffix: str, domain: str) -> dict[str, str]:
+        """Return {camera_name: entity_id} for Reolink entities matching suffix in domain."""
+        cam_slugs: dict[str, str] = {}
+        for config_entry in self.hass.config_entries.async_loaded_entries(REOLINK_DOMAIN):
+            try:
+                host = config_entry.runtime_data.host
+            except AttributeError:
+                continue
+            for channel in host.api.channels:
+                cam_name = host.api.camera_name(channel)
+                cam_slugs[slugify(cam_name)] = cam_name
+
+        if not cam_slugs:
+            return {}
+
+        result: dict[str, str] = {}
+        for entity_id in self.hass.states.async_entity_ids(domain):
+            if not entity_id.endswith(suffix):
+                continue
+            for cam_slug, cam_name in cam_slugs.items():
+                if cam_slug in entity_id and cam_name not in result:
+                    result[cam_name] = entity_id
+                    break
+
+        if len(result) < len(cam_slugs):
+            entity_reg = er.async_get(self.hass)
+            for entity in entity_reg.entities.values():
+                if (
+                    entity.platform == REOLINK_DOMAIN
+                    and entity.domain == domain
+                    and entity.entity_id.endswith(suffix)
+                ):
+                    for cam_slug, cam_name in cam_slugs.items():
+                        if cam_slug in entity.entity_id and cam_name not in result:
+                            result[cam_name] = entity.entity_id
+                            break
+
+        return result
+
+    def _find_pir_entities(self) -> dict[str, str]:
+        """Return {camera_name: pir_entity_id} for all Reolink cameras.
+
+        Searches hass.states (enabled entities only) so we only return
+        entity_ids that actually have a live state the frontend can read.
+        Falls back to the entity registry (disabled entities included) so
+        camera rows still appear, but in that case enabled=None is returned.
+        """
+        # Collect camera slugs from active Reolink config entries
+        cam_slugs: dict[str, str] = {}  # slug -> camera_name
+        for config_entry in self.hass.config_entries.async_loaded_entries(REOLINK_DOMAIN):
+            try:
+                host = config_entry.runtime_data.host
+            except AttributeError:
+                continue
+            for channel in host.api.channels:
+                cam_name = host.api.camera_name(channel)
+                cam_slugs[slugify(cam_name)] = cam_name
+
+        if not cam_slugs:
+            LOGGER.warning("No loaded Reolink config entries found")
+            return {}
+
+        # 1) Search enabled (stateful) switch entities first
+        result: dict[str, str] = {}
+        pir_switch_ids = [
+            eid for eid in self.hass.states.async_entity_ids("switch")
+            if eid.endswith("_pir_enabled")
+        ]
+        LOGGER.info("All enabled switch entities ending in _pir_enabled: %s", pir_switch_ids)
+
+        for entity_id in pir_switch_ids:
+            for cam_slug, cam_name in cam_slugs.items():
+                if cam_slug in entity_id and cam_name not in result:
+                    result[cam_name] = entity_id
+                    LOGGER.info("PIR entity matched: %s -> %s", cam_name, entity_id)
+                    break
+
+        # 2) For cameras still missing, fall back to the entity registry
+        #    (covers disabled entities — their state will be None)
+        if len(result) < len(cam_slugs):
+            entity_reg = er.async_get(self.hass)
+            for entity in entity_reg.entities.values():
+                if (
+                    entity.platform == REOLINK_DOMAIN
+                    and entity.domain == "switch"
+                    and entity.entity_id.endswith("_pir_enabled")
+                ):
+                    for cam_slug, cam_name in cam_slugs.items():
+                        if cam_slug in entity.entity_id and cam_name not in result:
+                            result[cam_name] = entity.entity_id
+                            LOGGER.warning(
+                                "PIR entity %s found in registry but has no state "
+                                "(likely disabled in HA). Enable it via Settings → "
+                                "Devices & Services → Reolink → Entities.",
+                                entity.entity_id,
+                            )
+                            break
+
+        if not result:
+            LOGGER.warning(
+                "No _pir_enabled switch entities found. "
+                "Camera slugs searched: %s. "
+                "All Reolink switch entities in registry: %s",
+                list(cam_slugs.keys()),
+                [e.entity_id for e in er.async_get(self.hass).entities.values()
+                 if e.platform == REOLINK_DOMAIN and e.domain == "switch"],
+            )
+
+        return result
+
+    async def async_get_cameras_config(self) -> list[dict]:
+        """Return per-camera config."""
+        pir_entities = self._find_pir_entities()
+        rfa_entities = self._find_cam_entities_by_suffix("_pir_reduce_false_alarm", "switch")
+        sens_entities = self._find_cam_entities_by_suffix("_pir_sensitivity", "number")
+        cameras_cfg = self._schedule.get("cameras", {})
+        result = []
+        for cam_name, pir_entity_id in pir_entities.items():
+            state = self.hass.states.get(pir_entity_id)
+            in_schedule = cameras_cfg.get(cam_name, {}).get("in_schedule", False)
+
+            rfa_entity_id = rfa_entities.get(cam_name)
+            rfa_state = self.hass.states.get(rfa_entity_id) if rfa_entity_id else None
+
+            sens_entity_id = sens_entities.get(cam_name)
+            sens_state = self.hass.states.get(sens_entity_id) if sens_entity_id else None
+
+            result.append({
+                "name": cam_name,
+                "pir_entity_id": pir_entity_id,
+                "rfa_entity_id": rfa_entity_id,
+                "sensitivity_entity_id": sens_entity_id,
+                "in_schedule": in_schedule,
+                "enabled": state.state == "on" if state else None,
+                "rfa_enabled": rfa_state.state == "on" if rfa_state else None,
+                "sensitivity": float(sens_state.state) if sens_state else None,
+                "sensitivity_min": float(sens_state.attributes.get("min", 0)) if sens_state else 0,
+                "sensitivity_max": float(sens_state.attributes.get("max", 100)) if sens_state else 100,
+            })
+        return result
+
+    def async_get_schedule(self) -> dict:
+        """Return current schedule settings."""
+        return {
+            "enabled": self._schedule.get("schedule_enabled", False),
+            "start_time": self._schedule.get("start_time", "22:00"),
+            "stop_time": self._schedule.get("stop_time", "06:00"),
+        }
+
+    async def async_set_schedule(self, enabled: bool, start_time: str, stop_time: str) -> None:
+        """Persist new schedule settings and apply them immediately."""
+        self._schedule["schedule_enabled"] = enabled
+        self._schedule["start_time"] = start_time
+        self._schedule["stop_time"] = stop_time
+        await self._schedule_store.async_save(self._schedule)
+        self._setup_schedule_timers()
+        if enabled:
+            await self._apply_schedule()
+
+    async def async_set_camera_in_schedule(self, camera_name: str, in_schedule: bool) -> None:
+        """Update whether a specific camera is included in the schedule."""
+        cameras = self._schedule.setdefault("cameras", {})
+        cameras.setdefault(camera_name, {})["in_schedule"] = in_schedule
+        await self._schedule_store.async_save(self._schedule)
+
+    def _is_within_schedule(self) -> bool:
+        """Return True if the current local time falls within the on-window."""
+        start = self._schedule.get("start_time", "22:00")
+        stop = self._schedule.get("stop_time", "06:00")
+        now = dt_util.now().strftime("%H:%M")
+        if start <= stop:
+            return start <= now < stop
+        # Crosses midnight (e.g. 22:00 → 06:00)
+        return now >= start or now < stop
+
+    async def _apply_schedule(self) -> None:
+        """Turn in-schedule cameras on or off depending on the current time."""
+        if not self._schedule.get("schedule_enabled"):
+            return
+        pir_entities = self._find_pir_entities()
+        cameras_cfg = self._schedule.get("cameras", {})
+        service = "turn_on" if self._is_within_schedule() else "turn_off"
+        for cam_name, pir_entity_id in pir_entities.items():
+            if cameras_cfg.get(cam_name, {}).get("in_schedule", True):
+                await self.hass.services.async_call(
+                    "switch", service,
+                    {"entity_id": pir_entity_id},
+                    blocking=False,
+                )
+        LOGGER.debug("Schedule applied: %s (within_window=%s)", service, self._is_within_schedule())
+
+    def _setup_schedule_timers(self) -> None:
+        """Register time-change callbacks for the schedule start and stop times."""
+        for unsub in self._schedule_unsubs:
+            unsub()
+        self._schedule_unsubs.clear()
+
+        if not self._schedule.get("schedule_enabled"):
+            return
+
+        start = self._schedule.get("start_time", "22:00")
+        stop = self._schedule.get("stop_time", "06:00")
+        try:
+            sh, sm = (int(x) for x in start.split(":"))
+            eh, em = (int(x) for x in stop.split(":"))
+        except (ValueError, AttributeError):
+            LOGGER.warning("Invalid schedule times: start=%s stop=%s", start, stop)
+            return
+
+        @callback
+        def _on_start(_now: Any) -> None:
+            self.hass.async_create_background_task(
+                self._apply_schedule(), name="dragontree_reolink_schedule_start"
+            )
+
+        @callback
+        def _on_stop(_now: Any) -> None:
+            self.hass.async_create_background_task(
+                self._apply_schedule(), name="dragontree_reolink_schedule_stop"
+            )
+
+        self._schedule_unsubs.append(
+            async_track_time_change(self.hass, _on_start, hour=sh, minute=sm, second=0)
+        )
+        self._schedule_unsubs.append(
+            async_track_time_change(self.hass, _on_stop, hour=eh, minute=em, second=0)
+        )
+        LOGGER.info("Schedule timers set: ON at %s, OFF at %s", start, stop)
 
     # ------------------------------------------------------------------ #
     # Helpers                                                              #

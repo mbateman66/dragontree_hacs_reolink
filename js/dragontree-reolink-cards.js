@@ -3,6 +3,8 @@
  *
  * Elements defined here:
  *   dragontree-reolink-playback  — 3-panel recording playback UI
+ *   dragontree-reolink-schedule  — camera schedule on/off times
+ *   dragontree-reolink-cameras   — per-camera enable + schedule toggles
  */
 
 // ---------------------------------------------------------------------------
@@ -801,3 +803,449 @@ class DragontreeReolinkPlayback extends HTMLElement {
 }
 
 customElements.define('dragontree-reolink-playback', DragontreeReolinkPlayback);
+
+// ---------------------------------------------------------------------------
+// dragontree-reolink-schedule
+// ---------------------------------------------------------------------------
+
+const SCHEDULE_STYLE = `
+  :host { display: block; }
+  .row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    min-height: 52px;
+    border-bottom: 1px solid var(--divider-color, #e0e0e0);
+  }
+  .row:last-of-type { border-bottom: none; }
+  .row-label { font-size: 1rem; color: var(--primary-text-color); }
+  input[type="time"] {
+    border: 1px solid var(--input-idle-line-color, var(--divider-color, #e0e0e0));
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 0.875rem;
+    background: transparent;
+    color: var(--primary-text-color);
+  }
+  .status-text {
+    padding: 4px 16px 16px;
+    font-size: 0.75rem;
+    color: var(--secondary-text-color, #888);
+    border-top: 1px solid var(--divider-color, #e0e0e0);
+  }
+`;
+
+const SCHEDULE_TEMPLATE = `
+  <style>${SCHEDULE_STYLE}</style>
+  <ha-card header="Camera Schedule">
+    <div class="row">
+      <span class="row-label">Schedule Enabled</span>
+      <ha-switch id="scheduleEnabled"></ha-switch>
+    </div>
+    <div class="row">
+      <span class="row-label">Cameras on at</span>
+      <input type="time" id="startTime" value="22:00">
+    </div>
+    <div class="row">
+      <span class="row-label">Cameras off at</span>
+      <input type="time" id="stopTime" value="06:00">
+    </div>
+    <div class="status-text" id="statusText"></div>
+  </ha-card>
+`;
+
+class DragontreeReolinkScheduleCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._hass = null;
+    this._initialized = false;
+    this._saving = false;
+  }
+
+  setConfig(config) { this._config = config; }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (!this._initialized) {
+      this._initialized = true;
+      this._build();
+    }
+  }
+
+  _build() {
+    this.shadowRoot.innerHTML = SCHEDULE_TEMPLATE;
+    this._loadSchedule().then(() => this._bindEvents());
+  }
+
+  async _loadSchedule() {
+    try {
+      const result = await this._hass.callWS({ type: 'dragontree_reolink/get_schedule' });
+      const sr = this.shadowRoot;
+      // ha-switch uses a Lit property — must set via JS, not attribute
+      const sw = sr.getElementById('scheduleEnabled');
+      if (sw) sw.checked = !!result.enabled;
+      sr.getElementById('startTime').value = result.start_time || '22:00';
+      sr.getElementById('stopTime').value = result.stop_time || '06:00';
+      this._updateStatus(result);
+    } catch (e) {
+      console.error('[reolink] Failed to load schedule:', e);
+    }
+  }
+
+  _bindEvents() {
+    const save = () => this._saveSchedule();
+    this.shadowRoot.getElementById('scheduleEnabled').addEventListener('change', save);
+    this.shadowRoot.getElementById('startTime').addEventListener('change', save);
+    this.shadowRoot.getElementById('stopTime').addEventListener('change', save);
+  }
+
+  async _saveSchedule() {
+    if (this._saving) return;
+    this._saving = true;
+    const sr = this.shadowRoot;
+    const enabled = sr.getElementById('scheduleEnabled').checked;
+    const startTime = sr.getElementById('startTime').value;
+    const stopTime = sr.getElementById('stopTime').value;
+    try {
+      await this._hass.callWS({
+        type: 'dragontree_reolink/set_schedule',
+        enabled,
+        start_time: startTime,
+        stop_time: stopTime,
+      });
+      this._updateStatus({ enabled, start_time: startTime, stop_time: stopTime });
+    } catch (e) {
+      console.error('[reolink] Failed to save schedule:', e);
+    } finally {
+      this._saving = false;
+    }
+  }
+
+  _updateStatus({ enabled, start_time, stop_time }) {
+    const el = this.shadowRoot.getElementById('statusText');
+    if (!el) return;
+    if (!enabled) {
+      el.textContent = 'Schedule disabled — cameras will not be automated.';
+    } else {
+      el.textContent = `Cameras will turn on at ${start_time} and off at ${stop_time}.`;
+    }
+  }
+}
+
+customElements.define('dragontree-reolink-schedule', DragontreeReolinkScheduleCard);
+
+// ---------------------------------------------------------------------------
+// dragontree-reolink-cameras
+// ---------------------------------------------------------------------------
+
+const CAMERAS_MGMT_STYLE = `
+  :host { display: block; }
+  .col-header {
+    display: grid;
+    grid-template-columns: 1fr auto auto 80px auto;
+    gap: 8px;
+    align-items: center;
+    padding: 0 16px 8px;
+    border-bottom: 1px solid var(--divider-color, #e0e0e0);
+  }
+  .col-label {
+    font-size: 0.72em;
+    font-weight: 600;
+    color: var(--secondary-text-color, #666);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    text-align: center;
+    white-space: nowrap;
+  }
+  .col-label:first-child { text-align: left; }
+  .cam-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto 80px auto;
+    gap: 8px;
+    align-items: center;
+    padding: 0 16px;
+    min-height: 52px;
+    border-bottom: 1px solid var(--divider-color, #e0e0e0);
+  }
+  .cam-row:last-child { border-bottom: none; }
+  .cam-name {
+    font-size: 1rem;
+    color: var(--primary-text-color);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .cell-center {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+  .sens-control {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  input[type="range"] {
+    flex: 1;
+    min-width: 0;
+    accent-color: var(--primary-color, #03a9f4);
+    cursor: pointer;
+  }
+  input[type="range"]:disabled { opacity: 0.4; cursor: default; }
+  .sens-value {
+    font-size: 0.82em;
+    min-width: 18px;
+    text-align: right;
+    color: var(--primary-text-color);
+  }
+  .list-msg {
+    padding: 16px;
+    text-align: center;
+    color: var(--secondary-text-color, #888);
+    font-size: 0.875rem;
+  }
+`;
+
+const CAMERAS_MGMT_TEMPLATE = `
+  <style>${CAMERAS_MGMT_STYLE}</style>
+  <ha-card header="Camera Management">
+    <div class="col-header">
+      <span class="col-label">Camera</span>
+      <span class="col-label">Enabled</span>
+      <span class="col-label">RFA</span>
+      <span class="col-label">Sens</span>
+      <span class="col-label">Sched</span>
+    </div>
+    <div id="cameraList"><div class="list-msg">Loading…</div></div>
+  </ha-card>
+`;
+
+class DragontreeReolinkCamerasCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._hass = null;
+    this._initialized = false;
+    this._cameras = [];
+    this._suppressedUntil = {}; // entity_id → timestamp; skip _syncStates() while pending
+  }
+
+  /** After a service call, suppress sync for this entity to avoid flicker. */
+  _suppressSync(entityId, ms = 3000) {
+    this._suppressedUntil[entityId] = Date.now() + ms;
+  }
+
+  setConfig(config) { this._config = config; }
+
+  set hass(hass) {
+    const prev = this._hass;
+    this._hass = hass;
+    if (!this._initialized) {
+      this._initialized = true;
+      this._build();
+    } else {
+      // Sync toggle and slider states whenever HA pushes a state update
+      this._syncStates();
+    }
+  }
+
+  _build() {
+    this.shadowRoot.innerHTML = CAMERAS_MGMT_TEMPLATE;
+    this._loadCameras();
+  }
+
+  async _loadCameras() {
+    try {
+      const result = await this._hass.callWS({ type: 'dragontree_reolink/get_cameras_config' });
+      this._cameras = result.cameras || [];
+      this._renderCameras();
+    } catch (e) {
+      console.error('[reolink] Failed to load cameras config:', e);
+      const list = this.shadowRoot.getElementById('cameraList');
+      if (list) list.innerHTML = '<div class="list-msg">Failed to load cameras</div>';
+    }
+  }
+
+  _renderCameras() {
+    const list = this.shadowRoot.getElementById('cameraList');
+    if (!list) return;
+
+    if (!this._cameras.length) {
+      list.innerHTML = '<div class="list-msg">No cameras found</div>';
+      return;
+    }
+
+    // Build structural HTML — ha-switch checked/disabled must be set as JS properties after insertion
+    list.innerHTML = this._cameras.map((cam) => {
+      const sensVal = cam.sensitivity ?? '';
+      const sensMin = cam.sensitivity_min ?? 0;
+      const sensMax = cam.sensitivity_max ?? 100;
+      const sensUnavail = !cam.sensitivity_entity_id;
+
+      return `
+        <div class="cam-row">
+          <span class="cam-name">${this._escHtml(cam.name)}</span>
+          <div class="cell-center">
+            <ha-switch class="pir-toggle"
+              data-entity="${this._escAttr(cam.pir_entity_id)}"
+              title="Enable / disable PIR detection"></ha-switch>
+          </div>
+          <div class="cell-center">
+            <ha-switch class="rfa-toggle"
+              data-entity="${this._escAttr(cam.rfa_entity_id || '')}"
+              title="Reduce false alarms"></ha-switch>
+          </div>
+          <div class="sens-control">
+            <input type="range" class="sensitivity-slider"
+              data-entity="${this._escAttr(cam.sensitivity_entity_id || '')}"
+              data-prev-value="${sensVal}"
+              min="${sensMin}" max="${sensMax}" step="1"
+              value="${sensVal || sensMin}"
+              ${sensUnavail ? 'disabled' : ''}>
+            <span class="sens-value">${sensVal !== '' ? Math.round(sensVal) : '—'}</span>
+          </div>
+          <div class="cell-center">
+            <ha-switch class="schedule-toggle"
+              data-camera="${this._escAttr(cam.name)}"
+              title="Include in schedule"></ha-switch>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    // Set checked/disabled properties on ha-switch elements (Lit props, not HTML attributes)
+    this._cameras.forEach((cam, i) => {
+      const row = list.querySelectorAll('.cam-row')[i];
+      if (!row) return;
+
+      const pirState = this._hass.states[cam.pir_entity_id];
+      const pirSw = row.querySelector('.pir-toggle');
+      if (pirSw) { pirSw.checked = pirState ? pirState.state === 'on' : false; pirSw.disabled = !pirState; }
+
+      const rfaState = cam.rfa_entity_id ? this._hass.states[cam.rfa_entity_id] : null;
+      const rfaSw = row.querySelector('.rfa-toggle');
+      if (rfaSw) { rfaSw.checked = rfaState ? rfaState.state === 'on' : false; rfaSw.disabled = !rfaState || !cam.rfa_entity_id; }
+
+      const schedSw = row.querySelector('.schedule-toggle');
+      if (schedSw) { schedSw.checked = !!cam.in_schedule; }
+    });
+
+    // PIR enable/disable
+    list.querySelectorAll('.pir-toggle').forEach(sw => {
+      sw.addEventListener('change', async () => {
+        const entityId = sw.dataset.entity;
+        const service = sw.checked ? 'turn_on' : 'turn_off';
+        this._suppressSync(entityId);
+        try {
+          await this._hass.callService('switch', service, { entity_id: entityId });
+        } catch (e) {
+          console.error('[reolink] Failed to toggle PIR:', e);
+          delete this._suppressedUntil[entityId];
+          sw.checked = !sw.checked;
+        }
+      });
+    });
+
+    // Reduce false alarm toggle
+    list.querySelectorAll('.rfa-toggle').forEach(sw => {
+      sw.addEventListener('change', async () => {
+        const entityId = sw.dataset.entity;
+        if (!entityId) return;
+        const service = sw.checked ? 'turn_on' : 'turn_off';
+        this._suppressSync(entityId);
+        try {
+          await this._hass.callService('switch', service, { entity_id: entityId });
+        } catch (e) {
+          console.error('[reolink] Failed to toggle RFA:', e);
+          delete this._suppressedUntil[entityId];
+          sw.checked = !sw.checked;
+        }
+      });
+    });
+
+    // Sensitivity slider — live display update on drag, save on release
+    list.querySelectorAll('.sensitivity-slider').forEach(slider => {
+      const valEl = slider.parentElement.querySelector('.sens-value');
+      slider.addEventListener('input', () => {
+        if (valEl) valEl.textContent = slider.value;
+      });
+      slider.addEventListener('change', async () => {
+        const entityId = slider.dataset.entity;
+        if (!entityId) return;
+        const newValue = parseFloat(slider.value);
+        const prevValue = slider.dataset.prevValue;
+        slider.dataset.prevValue = slider.value;
+        this._suppressSync(entityId);
+        try {
+          await this._hass.callService('number', 'set_value', { entity_id: entityId, value: newValue });
+        } catch (e) {
+          console.error('[reolink] Failed to set sensitivity:', e);
+          delete this._suppressedUntil[entityId];
+          slider.value = prevValue;
+          if (valEl) valEl.textContent = prevValue;
+        }
+      });
+    });
+
+    // Schedule inclusion
+    list.querySelectorAll('.schedule-toggle').forEach(sw => {
+      sw.addEventListener('change', async () => {
+        try {
+          await this._hass.callWS({
+            type: 'dragontree_reolink/set_camera_in_schedule',
+            camera: sw.dataset.camera,
+            in_schedule: sw.checked,
+          });
+        } catch (e) {
+          console.error('[reolink] Failed to update schedule inclusion:', e);
+          sw.checked = !sw.checked;
+        }
+      });
+    });
+  }
+
+  /** Keep toggle and slider states in sync when HA pushes entity state changes. */
+  _syncStates() {
+    const now = Date.now();
+    this.shadowRoot.querySelectorAll('.pir-toggle').forEach(sw => {
+      if ((this._suppressedUntil[sw.dataset.entity] || 0) > now) return;
+      const state = this._hass.states[sw.dataset.entity];
+      if (state) { sw.checked = state.state === 'on'; sw.disabled = false; }
+    });
+    this.shadowRoot.querySelectorAll('.rfa-toggle').forEach(sw => {
+      if (!sw.dataset.entity) return;
+      if ((this._suppressedUntil[sw.dataset.entity] || 0) > now) return;
+      const state = this._hass.states[sw.dataset.entity];
+      if (state) { sw.checked = state.state === 'on'; sw.disabled = false; }
+    });
+    this.shadowRoot.querySelectorAll('.sensitivity-slider').forEach(slider => {
+      if (!slider.dataset.entity) return;
+      if ((this._suppressedUntil[slider.dataset.entity] || 0) > now) return;
+      const state = this._hass.states[slider.dataset.entity];
+      if (state) {
+        slider.value = state.state;
+        slider.disabled = false;
+        slider.dataset.prevValue = state.state;
+        const valEl = slider.parentElement.querySelector('.sens-value');
+        if (valEl) valEl.textContent = Math.round(parseFloat(state.state));
+      }
+    });
+  }
+
+  _escAttr(str) {
+    return String(str).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  }
+
+  _escHtml(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+}
+
+customElements.define('dragontree-reolink-cameras', DragontreeReolinkCamerasCard);

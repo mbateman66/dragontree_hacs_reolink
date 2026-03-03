@@ -4,6 +4,40 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - 2026-03-03
+
+### Added
+- **Camera Schedule card** (`dragontree-reolink-schedule`): configure a daily
+  on/off schedule for cameras with a schedule-enabled toggle and start/stop
+  time pickers. Settings are persisted in HA storage and survive restarts.
+- **Camera Management card** (`dragontree-reolink-cameras`): one row per
+  Reolink camera with: PIR-enabled toggle (`*_pir_enabled`), reduce-false-alarm
+  toggle (`*_pir_reduce_false_alarm`), sensitivity slider (`*_pir_sensitivity`),
+  and an "include in schedule" toggle. All controls read/write the corresponding
+  HA entities directly.
+- New WebSocket commands: `dragontree_reolink/get_cameras_config`,
+  `dragontree_reolink/set_camera_in_schedule`, `dragontree_reolink/get_schedule`,
+  `dragontree_reolink/set_schedule`.
+- Schedule enforcement: at the configured start time the integration calls
+  `switch.turn_on` for all in-schedule cameras; at the stop time it calls
+  `switch.turn_off`. Overnight windows (e.g. 22:00 → 06:00) are handled
+  correctly. On integration startup the schedule is applied immediately if
+  it is active.
+
+### Changed
+- Status & Configuration view and Camera Management view merged into a single
+  **Status & Cameras** view (icon `mdi:gauge`), reducing dashboard tab count.
+- Schedule and cameras cards now use `ha-card` and `ha-switch` — the same
+  elements used by the built-in entities card — for visual consistency with
+  the rest of the HA UI.
+- "Include in schedule" defaults to off for newly discovered cameras; must
+  be explicitly enabled per camera.
+
+### Fixed
+- Toggle switches in the cameras card no longer revert momentarily after being
+  clicked. A per-entity suppression window prevents `_syncStates()` from
+  overwriting optimistic UI updates during the service call round-trip.
+
 ## [1.2.7] - 2026-03-02
 
 ### Fixed

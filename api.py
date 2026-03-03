@@ -36,6 +36,10 @@ def async_register_ws_commands(hass: HomeAssistant) -> None:
     """Register WebSocket API commands (idempotent)."""
     websocket_api.async_register_command(hass, ws_get_recordings)
     websocket_api.async_register_command(hass, ws_get_cameras)
+    websocket_api.async_register_command(hass, ws_get_cameras_config)
+    websocket_api.async_register_command(hass, ws_set_camera_in_schedule)
+    websocket_api.async_register_command(hass, ws_get_schedule)
+    websocket_api.async_register_command(hass, ws_set_schedule)
 
 
 @websocket_api.websocket_command(
@@ -103,3 +107,92 @@ async def ws_get_cameras(
 
     cameras = await runtime_data.coordinator._db.get_distinct_cameras()
     connection.send_result(msg["id"], {"cameras": cameras})
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): f"{DOMAIN}/get_cameras_config"}
+)
+@websocket_api.async_response
+async def ws_get_cameras_config(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """Return per-camera config: name, pir_entity_id, in_schedule, enabled."""
+    runtime_data: DragontreeReolinkData | None = hass.data.get(DOMAIN)
+    if runtime_data is None:
+        connection.send_error(msg["id"], "not_ready", "Coordinator not available")
+        return
+
+    cameras = await runtime_data.coordinator.async_get_cameras_config()
+    connection.send_result(msg["id"], {"cameras": cameras})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/set_camera_in_schedule",
+        vol.Required("camera"): str,
+        vol.Required("in_schedule"): bool,
+    }
+)
+@websocket_api.async_response
+async def ws_set_camera_in_schedule(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """Update whether a camera is included in the automated schedule."""
+    runtime_data: DragontreeReolinkData | None = hass.data.get(DOMAIN)
+    if runtime_data is None:
+        connection.send_error(msg["id"], "not_ready", "Coordinator not available")
+        return
+
+    await runtime_data.coordinator.async_set_camera_in_schedule(
+        msg["camera"], msg["in_schedule"]
+    )
+    connection.send_result(msg["id"], {})
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): f"{DOMAIN}/get_schedule"}
+)
+@websocket_api.async_response
+async def ws_get_schedule(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """Return the current camera schedule settings."""
+    runtime_data: DragontreeReolinkData | None = hass.data.get(DOMAIN)
+    if runtime_data is None:
+        connection.send_error(msg["id"], "not_ready", "Coordinator not available")
+        return
+
+    schedule = runtime_data.coordinator.async_get_schedule()
+    connection.send_result(msg["id"], schedule)
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/set_schedule",
+        vol.Required("enabled"): bool,
+        vol.Required("start_time"): str,
+        vol.Required("stop_time"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_set_schedule(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """Update camera schedule settings."""
+    runtime_data: DragontreeReolinkData | None = hass.data.get(DOMAIN)
+    if runtime_data is None:
+        connection.send_error(msg["id"], "not_ready", "Coordinator not available")
+        return
+
+    await runtime_data.coordinator.async_set_schedule(
+        msg["enabled"], msg["start_time"], msg["stop_time"]
+    )
+    connection.send_result(msg["id"], {})
