@@ -252,10 +252,6 @@ class ReolinkDownloadCoordinator:
         self._schedule_store = Store(self.hass, 1, f"{DOMAIN}_schedule")
         self._schedule = await self._schedule_store.async_load() or {}
         self._setup_schedule_timers()
-        if self._schedule.get("schedule_enabled"):
-            self.hass.async_create_background_task(
-                self._apply_schedule(), name="dragontree_reolink_schedule_apply"
-            )
 
         # Generate thumbnails for recordings that don't have them yet
         self.hass.async_create_background_task(
@@ -1046,7 +1042,7 @@ class ReolinkDownloadCoordinator:
         cameras_cfg = self._schedule.get("cameras", {})
         service = "turn_on" if self._is_within_schedule() else "turn_off"
         for cam_name, pir_entity_id in pir_entities.items():
-            if cameras_cfg.get(cam_name, {}).get("in_schedule", True):
+            if cameras_cfg.get(cam_name, {}).get("in_schedule", False):
                 await self.hass.services.async_call(
                     "switch", service,
                     {"entity_id": pir_entity_id},

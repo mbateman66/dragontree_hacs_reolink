@@ -4,6 +4,16 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.3.1] - 2026-03-03
+
+### Fixed
+- Integration reload no longer writes PIR-enabled or reduce-false-alarm settings back
+  to the hub. The startup `_apply_schedule()` call has been removed from
+  `async_initialize()` — schedule enforcement now fires exclusively via the configured
+  time-change callbacks, never on integration load.
+- `in_schedule` default in `_apply_schedule()` changed from `True` → `False`, so
+  cameras that were never explicitly opted in to the schedule are no longer toggled.
+
 ## [1.3.0] - 2026-03-03
 
 ### Added
