@@ -4,6 +4,16 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.3.3] - 2026-03-03
+
+### Fixed
+- Prev/Next navigation buttons and auto-advance on playback end now move in
+  the correct direction. `sortDesc` was removed from the filters object in
+  v1.2.6 (sort order became fixed newest-first) but the direction helpers
+  still checked `this._filters.sortDesc`, which was always `undefined`,
+  reversing both directions. The helpers are now unconditional: higher index
+  = older, lower index = newer.
+
 ## [1.3.2] - 2026-03-03
 
 ### Fixed

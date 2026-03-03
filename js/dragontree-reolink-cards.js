@@ -768,18 +768,18 @@ class DragontreeReolinkPlayback extends HTMLElement {
 
   // ── Time-direction helpers ────────────────────────────────────────────────
 
-  /** Index of the next-older recording, or -1 if none. */
+  /** Index of the next-older recording, or -1 if none. List is always newest-first. */
   _olderIndex() {
     if (this._selectedIndex < 0) return -1;
-    const i = this._filters.sortDesc ? this._selectedIndex + 1 : this._selectedIndex - 1;
-    return (i >= 0 && i < this._recordings.length) ? i : -1;
+    const i = this._selectedIndex + 1; // higher index = older
+    return i < this._recordings.length ? i : -1;
   }
 
-  /** Index of the next-newer recording, or -1 if none. */
+  /** Index of the next-newer recording, or -1 if none. List is always newest-first. */
   _newerIndex() {
     if (this._selectedIndex < 0) return -1;
-    const i = this._filters.sortDesc ? this._selectedIndex - 1 : this._selectedIndex + 1;
-    return (i >= 0 && i < this._recordings.length) ? i : -1;
+    const i = this._selectedIndex - 1; // lower index = newer
+    return i >= 0 ? i : -1;
   }
 
   _updateNavButtons() {
