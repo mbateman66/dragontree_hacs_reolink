@@ -33,6 +33,7 @@ from .const import (
     DEFAULT_MAX_DISK_GB,
     DEFAULT_STREAM,
     DOMAIN,
+    EVENT_QUEUE_CHANGED,
     EVENT_RECORDING_ADDED,
     INIT_LOOKBACK_DAYS,
     INIT_RECORDINGS_PER_CAMERA,
@@ -181,6 +182,9 @@ class ReolinkDownloadCoordinator:
         self._in_progress_paths: set[str] = set()
         # Display metadata for queued/downloading items (for UI visibility)
         self._pending_meta: dict[str, dict] = {}
+        # Display metadata for recordings still being captured on the hub
+        # (visible on hub but not yet eligible for download)
+        self._recording_meta: dict[str, dict] = {}
 
         self._last_download: dt.datetime | None = None
         self._last_check: dict[str, dt.datetime] = {}
@@ -370,6 +374,12 @@ class ReolinkDownloadCoordinator:
             )
             return
 
+        # Snapshot existing recording_meta keys for this channel so we can prune stale ones.
+        old_recording = {fp for fp, m in self._recording_meta.items() if m.get("_channel_key") == key}
+        # Clear them now; _maybe_enqueue will re-add any that are still active.
+        for fp in old_recording:
+            self._recording_meta.pop(fp, None)
+
         for status in statuses:
             for day in status.days:
                 day_start = dt.datetime(status.year, status.month, day, 0, 0, 0)
@@ -389,7 +399,11 @@ class ReolinkDownloadCoordinator:
                 for vod_file in vod_files:
                     vod_start = vod_file.start_time.replace(tzinfo=None)
                     if vod_start >= query_from:
-                        await self._maybe_enqueue(host, channel, entry_id, vod_file)
+                        await self._maybe_enqueue(host, channel, entry_id, vod_file, channel_key=key)
+
+        new_recording = {fp for fp in self._recording_meta if self._recording_meta[fp].get("_channel_key") == key}
+        if old_recording != new_recording:
+            self.hass.bus.async_fire(EVENT_QUEUE_CHANGED)
 
         self._last_check[key] = now
         await self._db.upsert_last_check(key, now.isoformat())
@@ -535,7 +549,8 @@ class ReolinkDownloadCoordinator:
     # ------------------------------------------------------------------ #
 
     async def _maybe_enqueue(
-        self, host: Any, channel: int, entry_id: str, vod_file: Any
+        self, host: Any, channel: int, entry_id: str, vod_file: Any,
+        channel_key: str | None = None,
     ) -> bool:
         """Enqueue a VOD file for download if not already tracked/queued/on disk."""
         is_hub = getattr(host.api, "is_hub", False)
@@ -548,12 +563,15 @@ class ReolinkDownloadCoordinator:
         # it carries a real end_time.  As a belt-and-suspenders check, also
         # skip filenames where the hub encodes end time as 000000 (older firmware).
         end_time = getattr(vod_file, "end_time", None)
+        file_path = self._make_file_path(host, channel, vod_file)
         if end_time is None:
             LOGGER.debug("Skipping in-progress recording (no end_time): %s", vod_file.file_name)
+            self._mark_recording(host, channel, vod_file, file_path, channel_key)
             return False
         m = _FILENAME_TIME_RE.search(os.path.basename(vod_file.file_name))
         if m and m.group(3) == "000000":
             LOGGER.debug("Skipping in-progress recording (000000 end): %s", vod_file.file_name)
+            self._mark_recording(host, channel, vod_file, file_path, channel_key)
             return False
         # The hub continuously updates end_time while recording (to roughly "now"),
         # so a non-None end_time does not mean the recording is complete.  Only
@@ -565,9 +583,11 @@ class ReolinkDownloadCoordinator:
                 "Skipping recording not yet old enough (end=%s cutoff=%s): %s",
                 end_naive.isoformat(), cutoff.isoformat(), vod_file.file_name,
             )
+            self._mark_recording(host, channel, vod_file, file_path, channel_key)
             return False
 
-        file_path = self._make_file_path(host, channel, vod_file)
+        # File is now eligible for download — remove any recording-state entry.
+        self._recording_meta.pop(file_path, None)
 
         if any(f["path"] == file_path for f in self._files):
             return False
@@ -610,6 +630,7 @@ class ReolinkDownloadCoordinator:
             os.path.basename(file_path), self._queue.qsize(),
         )
         self._notify_sensors()
+        self.hass.bus.async_fire(EVENT_QUEUE_CHANGED)
         return True
 
     # ------------------------------------------------------------------ #
@@ -626,6 +647,7 @@ class ReolinkDownloadCoordinator:
                 if file_path in self._pending_meta:
                     self._pending_meta[file_path]["status"] = "downloading"
                 self._notify_sensors()
+                self.hass.bus.async_fire(EVENT_QUEUE_CHANGED)
                 try:
                     await self._download_file(host, channel, vod_file, file_path)
                 except Exception as err:
@@ -1137,8 +1159,33 @@ class ReolinkDownloadCoordinator:
         LOGGER.info("Thumbnail backfill complete")
 
     def get_pending_recordings(self) -> list[dict]:
-        """Return metadata for recordings currently queued or downloading."""
-        return list(self._pending_meta.values())
+        """Return metadata for recordings currently recording, queued, or downloading."""
+        # Strip internal _channel_key before sending to the frontend
+        recording = [
+            {k: v for k, v in m.items() if k != "_channel_key"}
+            for m in self._recording_meta.values()
+        ]
+        return recording + list(self._pending_meta.values())
+
+    def _mark_recording(
+        self,
+        host: Any,
+        channel: int,
+        vod_file: Any,
+        file_path: str,
+        channel_key: str | None,
+    ) -> None:
+        """Add/update a recording-state entry for a file still being captured on the hub."""
+        if (
+            any(f["path"] == file_path for f in self._files)
+            or file_path in self._queued_paths
+            or file_path in self._in_progress_paths
+        ):
+            return
+        meta = self._build_pending_meta(host, channel, vod_file, file_path, "recording")
+        if channel_key:
+            meta["_channel_key"] = channel_key
+        self._recording_meta[file_path] = meta
 
     def _build_pending_meta(
         self, host: Any, channel: int, vod_file: Any, file_path: str, status: str

@@ -292,6 +292,15 @@ const STYLE = `
     background: #e8eaf6;
     color: #283593;
   }
+  .tag-recording {
+    font-size: 0.65em;
+    padding: 2px 5px;
+    border-radius: 3px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    background: #fce4ec;
+    color: #b71c1c;
+  }
 
   /* ── Load-more footer ── */
   .list-footer {
@@ -505,11 +514,12 @@ class DragontreeReolinkPlayback extends HTMLElement {
 
   _subscribeRecordingEvents() {
     if (this._unsubRecordingEvents) return;
-    this._hass.connection.subscribeEvents(
-      () => this._debouncedRefresh(),
-      'dragontree_reolink_recording_added'
-    ).then(unsub => {
-      this._unsubRecordingEvents = unsub;
+    const refresh = () => this._debouncedRefresh();
+    Promise.all([
+      this._hass.connection.subscribeEvents(refresh, 'dragontree_reolink_recording_added'),
+      this._hass.connection.subscribeEvents(refresh, 'dragontree_reolink_queue_changed'),
+    ]).then(([unsub1, unsub2]) => {
+      this._unsubRecordingEvents = () => { unsub1(); unsub2(); };
     }).catch(err => {
       console.warn('[reolink] Event subscription failed, relying on state fallback:', err);
     });
@@ -700,13 +710,14 @@ class DragontreeReolinkPlayback extends HTMLElement {
   _pendingItemHTML(rec) {
     const tags = parseTriggers(rec.triggers);
     const tagBadges = tags.map(t => `<span class="tag tag-${t}">${t}</span>`).join('');
-    const statusBadge = `<span class="tag-${rec.status}">${rec.status === 'downloading' ? 'DOWNLOADING' : 'QUEUED'}</span>`;
+    const statusLabel = rec.status === 'downloading' ? 'DOWNLOADING' : rec.status === 'recording' ? 'RECORDING' : 'QUEUED';
+    const statusBadge = `<span class="tag-${rec.status}">${statusLabel}</span>`;
     return `
       <div class="rec-item pending">
         <div class="rec-thumb-empty"></div>
         <div class="rec-info">
           <div class="rec-camera">${this._escHtml(rec.camera)}</div>
-          <div class="rec-time">${formatDate(rec.start_time)}${rec.duration_s ? ' &middot; ' + formatDuration(rec.duration_s) : ''}</div>
+          <div class="rec-time">${formatDate(rec.start_time)}${rec.duration_s && rec.status !== 'recording' ? ' &middot; ' + formatDuration(rec.duration_s) : ''}</div>
         </div>
         <div class="rec-right">
           <div class="rec-time-of-day">${formatTime(rec.start_time)}</div>
