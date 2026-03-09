@@ -4,6 +4,15 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.3.5] - 2026-03-09
+
+### Fixed
+- Duplicate recordings (root cause): `_maybe_enqueue` reserved a slot in
+  `_queued_paths` only *after* `await os.path.exists(...)`, so two concurrent
+  callers (e.g. startup catchup + motion-triggered check) could both pass all
+  in-memory guards, both yield at the executor call, and both enqueue the same
+  file. The slot is now reserved *before* the first `await`, closing the window.
+
 ## [1.3.4] - 2026-03-09
 
 ### Fixed

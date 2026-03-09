@@ -675,9 +675,15 @@ class ReolinkDownloadCoordinator:
         if file_path in self._in_progress_paths:
             return False
 
+        # Reserve the slot before the first await so a concurrent call for the
+        # same path (e.g. startup catchup + motion check) cannot also pass the
+        # in-memory checks and enqueue a duplicate.
+        self._queued_paths.add(file_path)
+
         exists = await self.hass.async_add_executor_job(os.path.exists, file_path)
         if exists:
-            # File exists but wasn't tracked — adopt it
+            # File exists but wasn't tracked — adopt it (un-reserve first)
+            self._queued_paths.discard(file_path)
             size = await self.hass.async_add_executor_job(os.path.getsize, file_path)
             downloaded_at = dt.datetime.now().isoformat()
             self._files.append({
@@ -692,7 +698,6 @@ class ReolinkDownloadCoordinator:
             )
             return False
 
-        self._queued_paths.add(file_path)
         await self._queue.put((host, channel, entry_id, vod_file, file_path))
         LOGGER.debug(
             "Queued: %s ch%s → %s (depth %d)",
