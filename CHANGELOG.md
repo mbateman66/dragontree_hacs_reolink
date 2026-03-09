@@ -4,6 +4,25 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.3.6] - 2026-03-09
+
+### Changed
+- Removed motion-triggered download checks entirely; polling is now the sole
+  trigger for detecting new recordings (simpler, no race conditions).
+- Poll interval reduced from 60 s to 15 s for faster recording detection.
+
+### Fixed
+- Duplicate recordings: replaced the `end_time > now` guard with a
+  `MIN_RECORDING_AGE_S` (30 s) minimum-age check. The hub continuously
+  updates `end_time` while a recording is in progress, so the old check was
+  unreliable — the new check requires `end_time` to be at least 30 seconds in
+  the past before a file is eligible for download.
+
+### Added
+- In-progress and queued downloads now appear at the top of the recordings
+  list as greyed-out rows with DOWNLOADING / QUEUED badges, so activity is
+  visible while waiting for files to complete.
+
 ## [1.3.5] - 2026-03-09
 
 ### Fixed

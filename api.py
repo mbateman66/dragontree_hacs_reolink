@@ -87,7 +87,9 @@ async def ws_get_recordings(
         if row.get("thumb_path"):
             row["thumb_content_id"] = _path_to_content_id(row["thumb_path"])
 
-    connection.send_result(msg["id"], {"recordings": rows})
+    pending = runtime_data.coordinator.get_pending_recordings()
+
+    connection.send_result(msg["id"], {"recordings": rows, "pending": pending})
 
 
 @websocket_api.websocket_command(

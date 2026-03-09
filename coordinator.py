@@ -19,7 +19,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
-from homeassistant.helpers.event import async_track_state_change_event, async_track_time_change
+from homeassistant.helpers.event import async_track_time_change
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util, slugify
 from homeassistant.util.ssl import SSLCipherList
@@ -38,8 +38,7 @@ from .const import (
     INIT_RECORDINGS_PER_CAMERA,
     LOGGER,
     MEDIA_BASE_DIR,
-    MOTION_END_DELAY,
-    MOTION_START_FALLBACK_DELAY,
+    MIN_RECORDING_AGE_S,
     POLL_INTERVAL,
     POLL_LOOKBACK_BUFFER,
     REOLINK_DOMAIN,
@@ -157,8 +156,6 @@ class ReolinkDownloadCoordinator:
     Architecture:
     - A single asyncio.Queue serialises all downloads (one at a time).
     - A background polling loop checks for new recordings every POLL_INTERVAL s.
-    - Reolink dispatcher motion signals trigger an additional 60-second-delayed
-      per-channel check so recent recordings are picked up quickly.
     - Disk space is managed by deleting the oldest tracked recordings when the
       limit would be exceeded by the next download.
     """
@@ -182,18 +179,11 @@ class ReolinkDownloadCoordinator:
         self._queued_paths: set[str] = set()
         # Paths currently being downloaded (dequeued but not yet in _files)
         self._in_progress_paths: set[str] = set()
+        # Display metadata for queued/downloading items (for UI visibility)
+        self._pending_meta: dict[str, dict] = {}
 
         self._last_download: dt.datetime | None = None
         self._last_check: dict[str, dt.datetime] = {}
-
-        # Per-channel debounce tasks for motion-triggered checks
-        self._pending_checks: dict[str, asyncio.Task] = {}
-
-        # Channels currently known to have motion active (key = f"{entry_id}_{channel}")
-        self._motion_active: set[str] = set()
-
-        # Dispatcher unsubscribe callbacks
-        self._unsub_dispatchers: list = []
 
         # Camera schedule
         self._schedule: dict = {}
@@ -248,8 +238,6 @@ class ReolinkDownloadCoordinator:
             self._polling_loop(), name="dragontree_reolink_poll"
         )
 
-        self._subscribe_to_reolink_events()
-
         # Load and activate camera schedule
         self._schedule_store = Store(self.hass, 1, f"{DOMAIN}_schedule")
         self._schedule = await self._schedule_store.async_load() or {}
@@ -268,17 +256,9 @@ class ReolinkDownloadCoordinator:
 
     async def async_unload(self) -> None:
         """Cancel all background tasks and unsubscribe dispatchers."""
-        for unsub in self._unsub_dispatchers:
-            unsub()
-        self._unsub_dispatchers.clear()
-
         for unsub in self._schedule_unsubs:
             unsub()
         self._schedule_unsubs.clear()
-
-        for task in list(self._pending_checks.values()):
-            task.cancel()
-        self._pending_checks.clear()
 
         if self._worker_task:
             self._worker_task.cancel()
@@ -323,97 +303,6 @@ class ReolinkDownloadCoordinator:
             len(self._files),
             self._total_bytes / 1024**3,
         )
-
-    # ------------------------------------------------------------------ #
-    # Reolink event subscription (motion-triggered checks)                 #
-    # ------------------------------------------------------------------ #
-
-    def _subscribe_to_reolink_events(self) -> None:
-        """Subscribe to HA state-change events on Reolink motion binary sensors.
-
-        Builds a mapping of motion sensor entity_id → (entry_id, channel) by
-        matching each channel's camera name slug against the entity registry.
-        This is more reliable than Reolink's internal dispatcher signals, which
-        behave differently on the Home Hub.
-        """
-        entity_reg = er.async_get(self.hass)
-
-        # Map motion sensor entity_id → (entry_id, channel)
-        channel_map: dict[str, tuple[str, int]] = {}
-
-        for config_entry in self.hass.config_entries.async_loaded_entries(REOLINK_DOMAIN):
-            try:
-                host = config_entry.runtime_data.host
-            except AttributeError:
-                continue
-            for channel in host.api.channels:
-                cam_slug = slugify(host.api.camera_name(channel))
-                for entity in entity_reg.entities.values():
-                    if (
-                        entity.platform == REOLINK_DOMAIN
-                        and entity.domain == "binary_sensor"
-                        and entity.entity_id.endswith("_motion")
-                        and cam_slug in entity.entity_id
-                    ):
-                        channel_map[entity.entity_id] = (config_entry.entry_id, channel)
-                        break
-
-        if not channel_map:
-            LOGGER.warning("No Reolink motion sensors found — relying on poll only")
-            return
-
-        LOGGER.info("Subscribed to motion sensors: %s", list(channel_map.keys()))
-
-        @callback
-        def _on_motion_state_change(event: Any) -> None:
-            entity_id = event.data.get("entity_id")
-            new_state = event.data.get("new_state")
-            old_state = event.data.get("old_state")
-            if not new_state or not old_state or entity_id not in channel_map:
-                return
-
-            entry_id, channel = channel_map[entity_id]
-            key = f"{entry_id}_{channel}"
-
-            if new_state.state == "on" and old_state.state != "on":
-                self._motion_active.add(key)
-                LOGGER.debug("Motion started ch%s (%s) — fallback in %ds", channel, entity_id, MOTION_START_FALLBACK_DELAY)
-                self._schedule_channel_check(entry_id, channel, delay=MOTION_START_FALLBACK_DELAY)
-            elif new_state.state == "off" and old_state.state == "on":
-                self._motion_active.discard(key)
-                LOGGER.debug("Motion ended ch%s (%s) — check in %ds", channel, entity_id, MOTION_END_DELAY)
-                self._schedule_channel_check(entry_id, channel, delay=MOTION_END_DELAY)
-
-        unsub = async_track_state_change_event(
-            self.hass, list(channel_map.keys()), _on_motion_state_change
-        )
-        self._unsub_dispatchers.append(unsub)
-
-    def _schedule_channel_check(self, entry_id: str, channel: int, delay: int = MOTION_END_DELAY) -> None:
-        """Schedule a channel check after `delay` seconds, cancelling any pending one.
-
-        MOTION_END_DELAY is used when motion has ended (accounts for post-motion
-        recording extension + hub finalization). MOTION_START_FALLBACK_DELAY is
-        used as a fallback when motion just started, in case OFF never arrives.
-        """
-        key = f"{entry_id}_{channel}"
-        existing = self._pending_checks.pop(key, None)
-        if existing:
-            existing.cancel()
-        task = self.hass.async_create_background_task(
-            self._delayed_channel_check(entry_id, channel, delay),
-            name=f"dragontree_reolink_check_{key}",
-        )
-        self._pending_checks[key] = task
-
-    async def _delayed_channel_check(self, entry_id: str, channel: int, delay: int) -> None:
-        """Wait `delay` seconds, then scan for new recordings."""
-        try:
-            await asyncio.sleep(delay)
-        except asyncio.CancelledError:
-            return
-        self._pending_checks.pop(f"{entry_id}_{channel}", None)
-        await self._check_channel(entry_id, channel)
 
     # ------------------------------------------------------------------ #
     # Polling loop                                                         #
@@ -658,12 +547,24 @@ class ReolinkDownloadCoordinator:
         # The hub sets end_time to None while the file is open; once finalized
         # it carries a real end_time.  As a belt-and-suspenders check, also
         # skip filenames where the hub encodes end time as 000000 (older firmware).
-        if getattr(vod_file, "end_time", None) is None:
+        end_time = getattr(vod_file, "end_time", None)
+        if end_time is None:
             LOGGER.debug("Skipping in-progress recording (no end_time): %s", vod_file.file_name)
             return False
         m = _FILENAME_TIME_RE.search(os.path.basename(vod_file.file_name))
         if m and m.group(3) == "000000":
             LOGGER.debug("Skipping in-progress recording (000000 end): %s", vod_file.file_name)
+            return False
+        # The hub continuously updates end_time while recording (to roughly "now"),
+        # so a non-None end_time does not mean the recording is complete.  Only
+        # download once end_time is at least MIN_RECORDING_AGE_S seconds in the past.
+        end_naive = end_time.replace(tzinfo=None) if getattr(end_time, "tzinfo", None) else end_time
+        cutoff = self._camera_now(host) - dt.timedelta(seconds=MIN_RECORDING_AGE_S)
+        if end_naive > cutoff:
+            LOGGER.debug(
+                "Skipping recording not yet old enough (end=%s cutoff=%s): %s",
+                end_naive.isoformat(), cutoff.isoformat(), vod_file.file_name,
+            )
             return False
 
         file_path = self._make_file_path(host, channel, vod_file)
@@ -676,14 +577,18 @@ class ReolinkDownloadCoordinator:
             return False
 
         # Reserve the slot before the first await so a concurrent call for the
-        # same path (e.g. startup catchup + motion check) cannot also pass the
+        # same path (e.g. startup catchup + poll) cannot also pass the
         # in-memory checks and enqueue a duplicate.
         self._queued_paths.add(file_path)
+        self._pending_meta[file_path] = self._build_pending_meta(
+            host, channel, vod_file, file_path, "queued"
+        )
 
         exists = await self.hass.async_add_executor_job(os.path.exists, file_path)
         if exists:
             # File exists but wasn't tracked — adopt it (un-reserve first)
             self._queued_paths.discard(file_path)
+            self._pending_meta.pop(file_path, None)
             size = await self.hass.async_add_executor_job(os.path.getsize, file_path)
             downloaded_at = dt.datetime.now().isoformat()
             self._files.append({
@@ -718,6 +623,9 @@ class ReolinkDownloadCoordinator:
                 host, channel, entry_id, vod_file, file_path = await self._queue.get()
                 self._queued_paths.discard(file_path)
                 self._in_progress_paths.add(file_path)
+                if file_path in self._pending_meta:
+                    self._pending_meta[file_path]["status"] = "downloading"
+                self._notify_sensors()
                 try:
                     await self._download_file(host, channel, vod_file, file_path)
                 except Exception as err:
@@ -726,6 +634,7 @@ class ReolinkDownloadCoordinator:
                     )
                 finally:
                     self._in_progress_paths.discard(file_path)
+                    self._pending_meta.pop(file_path, None)
                     self._queue.task_done()
                     self._notify_sensors()
             except asyncio.CancelledError:
@@ -1226,6 +1135,32 @@ class ReolinkDownloadCoordinator:
             # Yield control between files so we don't hog the event loop
             await asyncio.sleep(0.1)
         LOGGER.info("Thumbnail backfill complete")
+
+    def get_pending_recordings(self) -> list[dict]:
+        """Return metadata for recordings currently queued or downloading."""
+        return list(self._pending_meta.values())
+
+    def _build_pending_meta(
+        self, host: Any, channel: int, vod_file: Any, file_path: str, status: str
+    ) -> dict:
+        """Build a minimal display dict for a queued/in-progress recording."""
+        start = getattr(vod_file, "start_time", None)
+        end = getattr(vod_file, "end_time", None)
+        if start and getattr(start, "tzinfo", None):
+            start = start.replace(tzinfo=None)
+        if end and getattr(end, "tzinfo", None):
+            end = end.replace(tzinfo=None)
+        duration = (end - start).total_seconds() if start and end else None
+        triggers = _trigger_names(getattr(vod_file, "triggers", None))
+        return {
+            "path": file_path,
+            "camera": host.api.camera_name(channel),
+            "start_time": start.isoformat() if start else None,
+            "end_time": end.isoformat() if end else None,
+            "duration_s": duration,
+            "triggers": json.dumps(triggers),
+            "status": status,
+        }
 
     def _notify_sensors(self) -> None:
         """Push an update signal so sensors refresh their state."""

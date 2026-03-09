@@ -268,6 +268,31 @@ const STYLE = `
   .tag-VEHICLE { background: #e3f2fd; color: #1565c0; }
   .tag-PERSON  { background: #fff3e0; color: #e65100; }
 
+  /* ── Pending (queued/downloading) items ── */
+  .rec-item.pending {
+    opacity: 0.45;
+    cursor: default;
+  }
+  .rec-item.pending:hover { background: transparent; }
+  .tag-downloading {
+    font-size: 0.65em;
+    padding: 2px 5px;
+    border-radius: 3px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    background: #f3e5f5;
+    color: #6a1b9a;
+  }
+  .tag-queued {
+    font-size: 0.65em;
+    padding: 2px 5px;
+    border-radius: 3px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    background: #e8eaf6;
+    color: #283593;
+  }
+
   /* ── Load-more footer ── */
   .list-footer {
     text-align: center;
@@ -327,6 +352,7 @@ class DragontreeReolinkPlayback extends HTMLElement {
     this.attachShadow({ mode: 'open' });
     this._hass = null;
     this._recordings = [];
+    this._pending = [];
     this._cameras = [];
     this._selectedIndex = -1;
     this._filtersOpen = false;
@@ -527,11 +553,13 @@ class DragontreeReolinkPlayback extends HTMLElement {
     try {
       const result = await this._hass.callWS(msg);
       this._recordings = result.recordings || [];
+      this._pending = result.pending || [];
       if (this._recordings.length < DragontreeReolinkPlayback._PAGE_SIZE) this._hasMore = false;
       if (this._selectedIndex >= this._recordings.length) this._selectedIndex = -1;
     } catch (e) {
       console.error('[reolink] Failed to load recordings:', e);
       this._recordings = [];
+      this._pending = [];
       this._hasMore = false;
     }
   }
@@ -562,6 +590,8 @@ class DragontreeReolinkPlayback extends HTMLElement {
     try {
       const result = await this._hass.callWS(msg);
       const more = result.recordings || [];
+      // pending is always current; update it on every page load
+      this._pending = result.pending || this._pending;
       const startIndex = this._recordings.length;
       this._recordings = this._recordings.concat(more);
       if (more.length < DragontreeReolinkPlayback._PAGE_SIZE) this._hasMore = false;
@@ -667,17 +697,37 @@ class DragontreeReolinkPlayback extends HTMLElement {
     `;
   }
 
+  _pendingItemHTML(rec) {
+    const tags = parseTriggers(rec.triggers);
+    const tagBadges = tags.map(t => `<span class="tag tag-${t}">${t}</span>`).join('');
+    const statusBadge = `<span class="tag-${rec.status}">${rec.status === 'downloading' ? 'DOWNLOADING' : 'QUEUED'}</span>`;
+    return `
+      <div class="rec-item pending">
+        <div class="rec-thumb-empty"></div>
+        <div class="rec-info">
+          <div class="rec-camera">${this._escHtml(rec.camera)}</div>
+          <div class="rec-time">${formatDate(rec.start_time)}${rec.duration_s ? ' &middot; ' + formatDuration(rec.duration_s) : ''}</div>
+        </div>
+        <div class="rec-right">
+          <div class="rec-time-of-day">${formatTime(rec.start_time)}</div>
+          <div class="rec-tags">${statusBadge}${tagBadges}</div>
+        </div>
+      </div>
+    `;
+  }
+
   _renderList() {
     const listPanel = this.shadowRoot.getElementById('listPanel');
     if (!listPanel) return;
 
-    if (!this._recordings.length) {
+    if (!this._recordings.length && !this._pending.length) {
       listPanel.innerHTML = '<div class="list-msg">No recordings found</div>';
       this._updateNavButtons();
       return;
     }
 
-    listPanel.innerHTML = this._recordings.map((rec, i) => this._recItemHTML(rec, i)).join('');
+    const pendingHtml = this._pending.map(rec => this._pendingItemHTML(rec)).join('');
+    listPanel.innerHTML = pendingHtml + this._recordings.map((rec, i) => this._recItemHTML(rec, i)).join('');
 
     listPanel.querySelectorAll('.rec-item').forEach(item => {
       item.addEventListener('click', () =>
