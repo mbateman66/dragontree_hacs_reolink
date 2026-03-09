@@ -4,6 +4,17 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.3.4] - 2026-03-09
+
+### Fixed
+- Duplicate recordings: fixed a race condition where a file dequeued for
+  download (and thus removed from `_queued_paths`) could be re-enqueued by a
+  concurrent poll before the download finished and the path was added to
+  `_files`. A new `_in_progress_paths` set now covers this window.
+- In-progress recordings: added a guard on `vod_file.end_time is None` so
+  files the hub is still writing are skipped at the API level, complementing
+  the existing filename `000000` end-time check.
+
 ## [1.3.3] - 2026-03-03
 
 ### Fixed

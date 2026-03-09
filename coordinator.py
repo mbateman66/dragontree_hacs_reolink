@@ -180,6 +180,8 @@ class ReolinkDownloadCoordinator:
 
         # Paths currently in the download queue (prevents duplicates)
         self._queued_paths: set[str] = set()
+        # Paths currently being downloaded (dequeued but not yet in _files)
+        self._in_progress_paths: set[str] = set()
 
         self._last_download: dt.datetime | None = None
         self._last_check: dict[str, dt.datetime] = {}
@@ -652,12 +654,16 @@ class ReolinkDownloadCoordinator:
         if vod_type is None:
             return False
 
-        # Skip recordings still being written — the hub sets end time to 000000
-        # in the filename while the file is open. The finalized version (with a
-        # real end time) will be picked up on the next poll.
+        # Skip recordings still being written.
+        # The hub sets end_time to None while the file is open; once finalized
+        # it carries a real end_time.  As a belt-and-suspenders check, also
+        # skip filenames where the hub encodes end time as 000000 (older firmware).
+        if getattr(vod_file, "end_time", None) is None:
+            LOGGER.debug("Skipping in-progress recording (no end_time): %s", vod_file.file_name)
+            return False
         m = _FILENAME_TIME_RE.search(os.path.basename(vod_file.file_name))
         if m and m.group(3) == "000000":
-            LOGGER.debug("Skipping in-progress recording: %s", vod_file.file_name)
+            LOGGER.debug("Skipping in-progress recording (000000 end): %s", vod_file.file_name)
             return False
 
         file_path = self._make_file_path(host, channel, vod_file)
@@ -665,6 +671,8 @@ class ReolinkDownloadCoordinator:
         if any(f["path"] == file_path for f in self._files):
             return False
         if file_path in self._queued_paths:
+            return False
+        if file_path in self._in_progress_paths:
             return False
 
         exists = await self.hass.async_add_executor_job(os.path.exists, file_path)
@@ -704,6 +712,7 @@ class ReolinkDownloadCoordinator:
             try:
                 host, channel, entry_id, vod_file, file_path = await self._queue.get()
                 self._queued_paths.discard(file_path)
+                self._in_progress_paths.add(file_path)
                 try:
                     await self._download_file(host, channel, vod_file, file_path)
                 except Exception as err:
@@ -711,6 +720,7 @@ class ReolinkDownloadCoordinator:
                         "Download failed for %s: %s", os.path.basename(file_path), err
                     )
                 finally:
+                    self._in_progress_paths.discard(file_path)
                     self._queue.task_done()
                     self._notify_sensors()
             except asyncio.CancelledError:
