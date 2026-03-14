@@ -156,6 +156,9 @@ const STYLE = `
   .filter-toggle:hover { background: var(--secondary-background-color, #f5f5f5); border-radius: 8px; }
   .arrow { display: inline-block; transition: transform 0.2s; font-size: 0.75em; }
   .filter-toggle.open .arrow { transform: rotate(180deg); }
+  .filter-title-group { display: flex; align-items: center; gap: 6px; }
+  #filterIcon { --mdc-icon-size: 16px; color: var(--disabled-text-color, #9e9e9e); pointer-events: none; }
+  #filterIcon.filters-active { color: var(--primary-color, #03a9f4); cursor: pointer; pointer-events: auto; }
   .filter-body {
     display: none;
     padding: 12px 14px;
@@ -329,7 +332,10 @@ const TEMPLATE = `
     <div class="right-panel">
       <div class="filter-panel">
         <div class="filter-toggle" id="filterToggle">
-          <span>Filters</span>
+          <span class="filter-title-group">
+            <span>Filters</span>
+            <ha-icon id="filterIcon" icon="mdi:filter-off"></ha-icon>
+          </span>
           <span class="arrow">&#9660;</span>
         </div>
         <div class="filter-body" id="filterBody">
@@ -425,6 +431,21 @@ class DragontreeReolinkPlayback extends HTMLElement {
     const body   = sr.getElementById('filterBody');
     if (toggle) toggle.classList.toggle('open', this._filtersOpen);
     if (body)   body.classList.toggle('open', this._filtersOpen);
+  }
+
+  _updateFilterIcon() {
+    const icon = this.shadowRoot && this.shadowRoot.getElementById('filterIcon');
+    if (!icon) return;
+    const active = this._filters.cameras.length > 0 || this._filters.triggers.length > 0;
+    icon.setAttribute('icon', active ? 'mdi:filter' : 'mdi:filter-off');
+    icon.classList.toggle('filters-active', active);
+  }
+
+  _clearFilters() {
+    this._filters = this._defaultFilters();
+    this._saveFilters();
+    this._renderFilterInputs();
+    this._loadRecordings().then(() => this._renderList());
   }
 
   disconnectedCallback() {
@@ -627,6 +648,14 @@ class DragontreeReolinkPlayback extends HTMLElement {
       this._saveFilters();
     });
 
+    sr.getElementById('filterIcon').addEventListener('click', (e) => {
+      const active = this._filters.cameras.length > 0 || this._filters.triggers.length > 0;
+      if (active) {
+        e.stopPropagation();
+        this._clearFilters();
+      }
+    });
+
     sr.getElementById('filterBody').addEventListener('change', () => this._applyFilters());
 
     sr.getElementById('btnPrev').addEventListener('click', () => {
@@ -668,6 +697,7 @@ class DragontreeReolinkPlayback extends HTMLElement {
       </label>
     `).join('');
 
+    this._updateFilterIcon();
   }
 
   _applyFilters() {
@@ -679,6 +709,7 @@ class DragontreeReolinkPlayback extends HTMLElement {
     };
 
     this._saveFilters();
+    this._updateFilterIcon();
     this._loadRecordings().then(() => this._renderList());
   }
 

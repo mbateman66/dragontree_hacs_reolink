@@ -4,6 +4,14 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.3.8] - 2026-03-14
+
+### Added
+- Filter icon in the filters panel header, visible even when the panel is collapsed.
+  Shows a funnel icon (mdi:filter) in the accent colour when any filters are active;
+  clicking it clears all filters without toggling the panel.
+  Shows a greyed-out mdi:filter-off icon when no filters are set (no action on click).
+
 ## [1.3.6] - 2026-03-09
 
 ### Changed
