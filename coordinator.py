@@ -16,7 +16,7 @@ from reolink_aio.typings import VOD_trigger
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_change
@@ -805,17 +805,47 @@ class ReolinkDownloadCoordinator:
     # Camera schedule                                                      #
     # ------------------------------------------------------------------ #
 
-    def _find_cam_entities_by_suffix(self, suffix: str, domain: str) -> dict[str, str]:
-        """Return {camera_name: entity_id} for Reolink entities matching suffix in domain."""
+    def _collect_cam_slugs(self) -> dict[str, str]:
+        """Return {slug: camera_name} for all Reolink cameras, including offline ones.
+
+        Primary source: the hub API (via loaded config entries).
+        Fallback: the device registry, which retains stable device names even when
+        a camera is offline and the hub API omits it or returns a placeholder name.
+        """
         cam_slugs: dict[str, str] = {}
-        for config_entry in self.hass.config_entries.async_loaded_entries(REOLINK_DOMAIN):
+        for config_entry in self.hass.config_entries.async_entries(REOLINK_DOMAIN):
             try:
                 host = config_entry.runtime_data.host
+                for channel in host.api.channels:
+                    cam_name = host.api.camera_name(channel)
+                    cam_slugs[slugify(cam_name)] = cam_name
             except AttributeError:
+                pass  # Entry not loaded; device registry fallback handles it below
+
+        # Fallback: scan the device registry for any Reolink _pir_enabled switch
+        # entities whose device name isn't yet in cam_slugs.  This covers cameras
+        # that are offline and whose channel the hub API no longer enumerates.
+        device_reg = dr.async_get(self.hass)
+        entity_reg = er.async_get(self.hass)
+        for entity in entity_reg.entities.values():
+            if (
+                entity.platform != REOLINK_DOMAIN
+                or entity.domain != "switch"
+                or not entity.entity_id.endswith("_pir_enabled")
+            ):
                 continue
-            for channel in host.api.channels:
-                cam_name = host.api.camera_name(channel)
-                cam_slugs[slugify(cam_name)] = cam_name
+            device = device_reg.async_get(entity.device_id) if entity.device_id else None
+            if device and device.name:
+                slug = slugify(device.name)
+                if slug not in cam_slugs:
+                    LOGGER.info("Camera %r found via device registry (not in hub API)", device.name)
+                    cam_slugs[slug] = device.name
+
+        return cam_slugs
+
+    def _find_cam_entities_by_suffix(self, suffix: str, domain: str) -> dict[str, str]:
+        """Return {camera_name: entity_id} for Reolink entities matching suffix in domain."""
+        cam_slugs = self._collect_cam_slugs()
 
         if not cam_slugs:
             return {}
@@ -851,17 +881,9 @@ class ReolinkDownloadCoordinator:
         entity_ids that actually have a live state the frontend can read.
         Falls back to the entity registry (disabled entities included) so
         camera rows still appear, but in that case enabled=None is returned.
+        Includes offline cameras whose config entry is not currently loaded.
         """
-        # Collect camera slugs from active Reolink config entries
-        cam_slugs: dict[str, str] = {}  # slug -> camera_name
-        for config_entry in self.hass.config_entries.async_loaded_entries(REOLINK_DOMAIN):
-            try:
-                host = config_entry.runtime_data.host
-            except AttributeError:
-                continue
-            for channel in host.api.channels:
-                cam_name = host.api.camera_name(channel)
-                cam_slugs[slugify(cam_name)] = cam_name
+        cam_slugs = self._collect_cam_slugs()
 
         if not cam_slugs:
             LOGGER.warning("No loaded Reolink config entries found")
@@ -932,15 +954,30 @@ class ReolinkDownloadCoordinator:
             sens_entity_id = sens_entities.get(cam_name)
             sens_state = self.hass.states.get(sens_entity_id) if sens_entity_id else None
 
+            # A camera is offline when its PIR entity is unavailable (camera unreachable)
+            online = state is not None and state.state not in ("unavailable", "unknown")
+
+            def _bool_state(s):
+                return s.state == "on" if (s and s.state not in ("unavailable", "unknown")) else None
+
+            def _float_state(s):
+                if not s or s.state in ("unavailable", "unknown"):
+                    return None
+                try:
+                    return float(s.state)
+                except (ValueError, TypeError):
+                    return None
+
             result.append({
                 "name": cam_name,
+                "online": online,
                 "pir_entity_id": pir_entity_id,
                 "rfa_entity_id": rfa_entity_id,
                 "sensitivity_entity_id": sens_entity_id,
                 "in_schedule": in_schedule,
-                "enabled": state.state == "on" if state else None,
-                "rfa_enabled": rfa_state.state == "on" if rfa_state else None,
-                "sensitivity": float(sens_state.state) if sens_state else None,
+                "enabled": _bool_state(state),
+                "rfa_enabled": _bool_state(rfa_state),
+                "sensitivity": _float_state(sens_state),
                 "sensitivity_min": float(sens_state.attributes.get("min", 0)) if sens_state else 0,
                 "sensitivity_max": float(sens_state.attributes.get("max", 100)) if sens_state else 100,
             })

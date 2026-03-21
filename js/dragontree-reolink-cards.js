@@ -1127,6 +1127,27 @@ const CAMERAS_MGMT_STYLE = `
     color: var(--secondary-text-color, #888);
     font-size: 0.875rem;
   }
+  .cam-row.offline {
+    opacity: 0.5;
+  }
+  .cam-row.offline .cam-name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .offline-badge {
+    display: inline-block;
+    font-size: 0.65em;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--error-color, #db4437);
+    border: 1px solid var(--error-color, #db4437);
+    border-radius: 3px;
+    padding: 1px 4px;
+    line-height: 1.4;
+    flex-shrink: 0;
+  }
 `;
 
 const CAMERAS_MGMT_TEMPLATE = `
@@ -1202,11 +1223,12 @@ class DragontreeReolinkCamerasCard extends HTMLElement {
       const sensVal = cam.sensitivity ?? '';
       const sensMin = cam.sensitivity_min ?? 0;
       const sensMax = cam.sensitivity_max ?? 100;
-      const sensUnavail = !cam.sensitivity_entity_id;
+      const sensUnavail = !cam.sensitivity_entity_id || cam.online === false;
+      const offline = cam.online === false;
 
       return `
-        <div class="cam-row">
-          <span class="cam-name">${this._escHtml(cam.name)}</span>
+        <div class="cam-row${offline ? ' offline' : ''}">
+          <span class="cam-name">${this._escHtml(cam.name)}${offline ? '<span class="offline-badge">Offline</span>' : ''}</span>
           <div class="cell-center">
             <ha-switch class="pir-toggle"
               data-entity="${this._escAttr(cam.pir_entity_id)}"
@@ -1240,16 +1262,17 @@ class DragontreeReolinkCamerasCard extends HTMLElement {
       const row = list.querySelectorAll('.cam-row')[i];
       if (!row) return;
 
+      const offline = cam.online === false;
       const pirState = this._hass.states[cam.pir_entity_id];
       const pirSw = row.querySelector('.pir-toggle');
-      if (pirSw) { pirSw.checked = pirState ? pirState.state === 'on' : false; pirSw.disabled = !pirState; }
+      if (pirSw) { pirSw.checked = pirState ? pirState.state === 'on' : false; pirSw.disabled = !pirState || offline; }
 
       const rfaState = cam.rfa_entity_id ? this._hass.states[cam.rfa_entity_id] : null;
       const rfaSw = row.querySelector('.rfa-toggle');
-      if (rfaSw) { rfaSw.checked = rfaState ? rfaState.state === 'on' : false; rfaSw.disabled = !rfaState || !cam.rfa_entity_id; }
+      if (rfaSw) { rfaSw.checked = rfaState ? rfaState.state === 'on' : false; rfaSw.disabled = !rfaState || !cam.rfa_entity_id || offline; }
 
       const schedSw = row.querySelector('.schedule-toggle');
-      if (schedSw) { schedSw.checked = !!cam.in_schedule; }
+      if (schedSw) { schedSw.checked = !!cam.in_schedule; schedSw.disabled = offline; }
     });
 
     // PIR enable/disable
@@ -1329,28 +1352,50 @@ class DragontreeReolinkCamerasCard extends HTMLElement {
   /** Keep toggle and slider states in sync when HA pushes entity state changes. */
   _syncStates() {
     const now = Date.now();
+    const UNAVAIL = new Set(['unavailable', 'unknown']);
+
     this.shadowRoot.querySelectorAll('.pir-toggle').forEach(sw => {
       if ((this._suppressedUntil[sw.dataset.entity] || 0) > now) return;
       const state = this._hass.states[sw.dataset.entity];
-      if (state) { sw.checked = state.state === 'on'; sw.disabled = false; }
+      if (!state) return;
+      const offline = UNAVAIL.has(state.state);
+      // Update offline styling on the row
+      const row = sw.closest('.cam-row');
+      if (row) {
+        row.classList.toggle('offline', offline);
+        const badge = row.querySelector('.offline-badge');
+        if (offline && !badge) {
+          const nameEl = row.querySelector('.cam-name');
+          if (nameEl) nameEl.insertAdjacentHTML('beforeend', '<span class="offline-badge">Offline</span>');
+        } else if (!offline && badge) {
+          badge.remove();
+        }
+      }
+      sw.checked = state.state === 'on';
+      sw.disabled = offline;
     });
     this.shadowRoot.querySelectorAll('.rfa-toggle').forEach(sw => {
       if (!sw.dataset.entity) return;
       if ((this._suppressedUntil[sw.dataset.entity] || 0) > now) return;
       const state = this._hass.states[sw.dataset.entity];
-      if (state) { sw.checked = state.state === 'on'; sw.disabled = false; }
+      if (!state) return;
+      const offline = UNAVAIL.has(state.state);
+      sw.checked = state.state === 'on';
+      sw.disabled = offline;
     });
     this.shadowRoot.querySelectorAll('.sensitivity-slider').forEach(slider => {
       if (!slider.dataset.entity) return;
       if ((this._suppressedUntil[slider.dataset.entity] || 0) > now) return;
       const state = this._hass.states[slider.dataset.entity];
-      if (state) {
-        slider.value = state.state;
-        slider.disabled = false;
-        slider.dataset.prevValue = state.state;
-        const valEl = slider.parentElement.querySelector('.sens-value');
-        if (valEl) valEl.textContent = Math.round(parseFloat(state.state));
-      }
+      if (!state) return;
+      if (UNAVAIL.has(state.state)) { slider.disabled = true; return; }
+      const parsed = parseFloat(state.state);
+      if (isNaN(parsed)) return;
+      slider.value = parsed;
+      slider.disabled = false;
+      slider.dataset.prevValue = parsed;
+      const valEl = slider.parentElement.querySelector('.sens-value');
+      if (valEl) valEl.textContent = Math.round(parsed);
     });
   }
 
