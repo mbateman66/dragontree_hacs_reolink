@@ -1708,9 +1708,6 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     this._recSecondsLeft  = 0;
     this._recTimerInterval = null;
     this._recStateOptimistic = null; // null = use entity state, true/false = optimistic
-
-    this._pendingRecordings = [];
-    this._unsubEvents = null;
   }
 
   setConfig(config) {
@@ -1745,10 +1742,6 @@ class DragontreeReolinkLiveCard extends HTMLElement {
   disconnectedCallback() {
     this._stopLive();
     this._stopRecordingTimer();
-    if (this._unsubEvents) {
-      this._unsubEvents();
-      this._unsubEvents = null;
-    }
   }
 
   // ── Initialisation ────────────────────────────────────────────────────────
@@ -1758,7 +1751,6 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     this._bindStaticEvents();
     this._loadCameras().then(() => {
       this._renderCameraList();
-      this._subscribeEvents();
     });
   }
 
@@ -1770,35 +1762,6 @@ class DragontreeReolinkLiveCard extends HTMLElement {
       console.error('[reolink-live] Failed to load cameras:', e);
       const list = this.shadowRoot.getElementById('listPanel');
       if (list) list.innerHTML = '<div class="list-msg">Failed to load cameras</div>';
-    }
-  }
-
-  _subscribeEvents() {
-    if (this._unsubEvents) return;
-    const refresh = () => this._refreshPending();
-    Promise.all([
-      this._hass.connection.subscribeEvents(refresh, 'dragontree_reolink_recording_added'),
-      this._hass.connection.subscribeEvents(refresh, 'dragontree_reolink_queue_changed'),
-    ]).then(([u1, u2]) => {
-      this._unsubEvents = () => { u1(); u2(); };
-    }).catch(err => {
-      console.warn('[reolink-live] Event subscription failed:', err);
-    });
-    this._refreshPending();
-  }
-
-  async _refreshPending() {
-    try {
-      const result = await this._hass.callWS({
-        type: 'dragontree_reolink/get_recordings',
-        sort_desc: true,
-        limit: 50,
-      });
-      this._pendingRecordings = result.pending || [];
-      this._updateCameraListBadges();
-      this._updateControlsStatus();
-    } catch (e) {
-      console.error('[reolink-live] Failed to refresh pending:', e);
     }
   }
 
@@ -2088,8 +2051,6 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     if (!cam.online) parts.push('<span class="badge-offline">Offline</span>');
     if (this._isManualRecording(cam)) {
       parts.push('<span class="badge-manrec-list">Manual Rec</span>');
-    } else if (this._isAutoRecording(cam.name)) {
-      parts.push('<span class="badge-rec-list">Auto Rec</span>');
     }
     return parts.join('');
   }
@@ -2131,16 +2092,11 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     }
 
     const isManualRec = this._isManualRecording(this._selectedCamera);
-    const isAutoRec = !isManualRec && this._isAutoRecording(this._selectedCamera.name);
 
     if (isManualRec) {
       btn.disabled = false;
       btn.classList.add('recording-active');
       btn.innerHTML = '<ha-icon icon="mdi:stop" style="--mdc-icon-size:16px"></ha-icon> Stop Rec';
-    } else if (isAutoRec) {
-      btn.disabled = true;
-      btn.classList.remove('recording-active');
-      btn.innerHTML = '<ha-icon icon="mdi:record" style="--mdc-icon-size:16px"></ha-icon> Record';
     } else {
       btn.disabled = !this._selectedCamera.record_entity_id;
       btn.classList.remove('recording-active');
@@ -2182,23 +2138,12 @@ class DragontreeReolinkLiveCard extends HTMLElement {
       return;
     }
 
-    const parts = [];
-    if (!this._isManualRecording(this._selectedCamera) &&
-        this._isAutoRecording(this._selectedCamera.name)) {
-      parts.push('<span class="status-badge badge-auto-rec">Auto Recording in Progress</span>');
-    }
-    statusEl.innerHTML = parts.join('');
+    statusEl.innerHTML = '';
 
     this._updateRecordButton();
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
-
-  _isAutoRecording(cameraName) {
-    return this._pendingRecordings.some(
-      p => p.camera === cameraName && p.status === 'recording'
-    );
-  }
 
   _isManualRecording(cam) {
     if (!cam?.record_entity_id) return false;
