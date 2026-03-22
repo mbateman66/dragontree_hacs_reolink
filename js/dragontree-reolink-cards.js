@@ -82,6 +82,10 @@ const STYLE = `
       width: 100%;
       flex-shrink: 0;
     }
+    #videoContent video {
+      position: absolute;
+      inset: 0;
+    }
     .video-overlay {
       position: relative;
       background: rgba(0, 0, 0, 0.9);
@@ -1761,6 +1765,10 @@ const LIVE_STYLE = `
       aspect-ratio: 16 / 9;
       width: 100%;
       flex-shrink: 0;
+    }
+    #streamContent ha-camera-stream {
+      position: absolute;
+      inset: 0;
     }
     .stream-overlay {
       position: relative;
