@@ -1686,6 +1686,7 @@ const LIVE_TEMPLATE = `
 
 class DragontreeReolinkLiveCard extends HTMLElement {
   static _DEFAULT_LIVE_TIMEOUT = 120; // seconds
+  static _DEFAULT_REC_TIMEOUT  = 120; // seconds
 
   constructor() {
     super();
@@ -1702,11 +1703,12 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     this._liveSecondsLeft = 0;
     this._liveTimerInterval = null;
 
+    this._recTimeoutSecs  = DragontreeReolinkLiveCard._DEFAULT_REC_TIMEOUT;
+    this._recSecondsLeft  = 0;
+    this._recTimerInterval = null;
+
     this._pendingRecordings = [];
     this._unsubEvents = null;
-
-    this._recordingStartedAt = null;
-    this._recTimerInterval = null;
 
     this._suppressedUntil = {};
   }
@@ -1716,6 +1718,10 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     if (config && config.live_timeout_seconds) {
       this._liveTimeoutSecs = parseInt(config.live_timeout_seconds, 10) ||
         DragontreeReolinkLiveCard._DEFAULT_LIVE_TIMEOUT;
+    }
+    if (config && config.record_timeout_seconds) {
+      this._recTimeoutSecs = parseInt(config.record_timeout_seconds, 10) ||
+        DragontreeReolinkLiveCard._DEFAULT_REC_TIMEOUT;
     }
   }
 
@@ -1918,14 +1924,42 @@ class DragontreeReolinkLiveCard extends HTMLElement {
 
   _startRecordingTimer(startedAt) {
     this._stopRecordingTimer();
-    this._recordingStartedAt = startedAt;
-    this._recTimerInterval = setInterval(() => this._updateTimerDisplay(), 1000);
+    const elapsed = Math.floor((Date.now() - startedAt.getTime()) / 1000);
+    this._recSecondsLeft = this._recTimeoutSecs - elapsed;
+
+    // Recording already past its limit — stop it immediately
+    if (this._recSecondsLeft <= 0) {
+      this._stopManualRecording();
+      return;
+    }
+
+    this._recTimerInterval = setInterval(() => {
+      this._recSecondsLeft--;
+      this._updateTimerDisplay();
+      if (this._recSecondsLeft <= 0) {
+        this._stopManualRecording();
+      }
+    }, 1000);
+    this._updateTimerDisplay();
   }
 
   _stopRecordingTimer() {
     clearInterval(this._recTimerInterval);
     this._recTimerInterval = null;
-    this._recordingStartedAt = null;
+    this._recSecondsLeft = 0;
+  }
+
+  async _stopManualRecording() {
+    this._stopRecordingTimer();
+    if (!this._selectedCamera?.record_entity_id) return;
+    const entityId = this._selectedCamera.record_entity_id;
+    this._suppressSync(entityId);
+    try {
+      await this._hass.callService('switch', 'turn_off', { entity_id: entityId });
+    } catch (e) {
+      console.error('[reolink-live] Failed to auto-stop recording:', e);
+      delete this._suppressedUntil[entityId];
+    }
   }
 
   // ── State sync (called on every hass update) ──────────────────────────────
@@ -2102,10 +2136,9 @@ class DragontreeReolinkLiveCard extends HTMLElement {
 
     const isManualRec = this._selectedCamera && this._isManualRecording(this._selectedCamera);
 
-    if (isManualRec && this._recordingStartedAt) {
-      const elapsed = Math.floor((Date.now() - this._recordingStartedAt.getTime()) / 1000);
-      el.textContent = 'REC ' + this._formatSecs(elapsed);
-      el.className = 'timer-display recording';
+    if (isManualRec && this._recTimerInterval !== null) {
+      el.textContent = 'REC ' + this._formatSecs(this._recSecondsLeft);
+      el.className = 'timer-display recording' + (this._recSecondsLeft <= 30 ? ' urgent' : '');
     } else if (this._isLive) {
       el.textContent = this._formatSecs(this._liveSecondsLeft);
       el.className = 'timer-display' + (this._liveSecondsLeft <= 30 ? ' urgent' : '');

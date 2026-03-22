@@ -7,4 +7,5 @@
   panel: true
   cards:
     - type: custom:dragontree-reolink-live
-      live_timeout_seconds: 120
+      live_timeout_seconds: 120   # auto-stop live view after this many seconds
+      record_timeout_seconds: 120 # auto-stop manual recording after this many seconds
