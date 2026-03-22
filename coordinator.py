@@ -201,6 +201,11 @@ class ReolinkDownloadCoordinator:
         self._manual_rec_timers: dict[str, dict] = {}
         self._manual_rec_state_unsub: Any = None
 
+        # Configurable timeouts (loaded from persistent store)
+        self._timer_config_store: Store | None = None
+        self._live_timeout_secs: int = 120
+        self._record_timeout_secs: int = MANUAL_REC_TIMEOUT_SECS
+
     # ------------------------------------------------------------------ #
     # Public properties (read by sensors)                                  #
     # ------------------------------------------------------------------ #
@@ -253,6 +258,12 @@ class ReolinkDownloadCoordinator:
         self._schedule_store = Store(self.hass, 1, f"{DOMAIN}_schedule")
         self._schedule = await self._schedule_store.async_load() or {}
         self._setup_schedule_timers()
+
+        # Load configurable timer defaults
+        self._timer_config_store = Store(self.hass, 1, f"{DOMAIN}_timer_config")
+        timer_cfg = await self._timer_config_store.async_load() or {}
+        self._live_timeout_secs = timer_cfg.get("live_timeout_secs", 120)
+        self._record_timeout_secs = timer_cfg.get("record_timeout_secs", MANUAL_REC_TIMEOUT_SECS)
 
         # Watch manual_record switches for server-side timer management
         self._setup_manual_rec_tracking()
@@ -867,8 +878,9 @@ class ReolinkDownloadCoordinator:
         self._stop_manual_rec_timer(cam_name)  # cancel any existing timer first
 
         started_at = dt_util.utcnow()
+        timeout = self._record_timeout_secs
         task = self.hass.async_create_background_task(
-            self._manual_rec_timeout_task(cam_name, entity_id, MANUAL_REC_TIMEOUT_SECS),
+            self._manual_rec_timeout_task(cam_name, entity_id, timeout),
             name=f"dragontree_reolink_rec_timer_{cam_name}",
         )
         self._manual_rec_timers[cam_name] = {
@@ -880,9 +892,9 @@ class ReolinkDownloadCoordinator:
             "camera": cam_name,
             "action": "started",
             "started_at": started_at.isoformat(),
-            "timeout_secs": MANUAL_REC_TIMEOUT_SECS,
+            "timeout_secs": timeout,
         })
-        LOGGER.info("Manual recording timer started for %s (%ds)", cam_name, MANUAL_REC_TIMEOUT_SECS)
+        LOGGER.info("Manual recording timer started for %s (%ds)", cam_name, timeout)
 
     def _stop_manual_rec_timer(self, cam_name: str) -> None:
         """Cancel any running timer for the given camera and notify the frontend."""
@@ -914,12 +926,31 @@ class ReolinkDownloadCoordinator:
         result = {}
         for cam_name, entry in self._manual_rec_timers.items():
             elapsed = (now - entry["started_at"]).total_seconds()
+            timeout = self._record_timeout_secs
             result[cam_name] = {
                 "started_at": entry["started_at"].isoformat(),
-                "timeout_secs": MANUAL_REC_TIMEOUT_SECS,
-                "seconds_remaining": max(0, MANUAL_REC_TIMEOUT_SECS - elapsed),
+                "timeout_secs": timeout,
+                "seconds_remaining": max(0, timeout - elapsed),
             }
         return result
+
+    def async_get_timer_config(self) -> dict:
+        """Return the current live and recording timeout settings."""
+        return {
+            "live_timeout_secs": self._live_timeout_secs,
+            "record_timeout_secs": self._record_timeout_secs,
+        }
+
+    async def async_set_timer_config(
+        self, live_timeout_secs: int, record_timeout_secs: int
+    ) -> None:
+        """Persist new timeout settings."""
+        self._live_timeout_secs = live_timeout_secs
+        self._record_timeout_secs = record_timeout_secs
+        await self._timer_config_store.async_save({
+            "live_timeout_secs": live_timeout_secs,
+            "record_timeout_secs": record_timeout_secs,
+        })
 
     # ------------------------------------------------------------------ #
     # Camera schedule                                                      #

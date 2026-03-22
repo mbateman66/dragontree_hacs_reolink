@@ -40,3 +40,6 @@
 
     # ── Camera Management ─────────────────────────────────────────────
     - type: custom:dragontree-reolink-cameras
+
+    # ── Timer Defaults ────────────────────────────────────────────────
+    - type: custom:dragontree-reolink-timers

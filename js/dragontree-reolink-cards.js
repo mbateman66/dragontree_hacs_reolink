@@ -5,6 +5,7 @@
  *   dragontree-reolink-playback  — 3-panel recording playback UI
  *   dragontree-reolink-schedule  — camera schedule on/off times
  *   dragontree-reolink-cameras   — per-camera enable + schedule toggles
+ *   dragontree-reolink-timers    — configurable live-view and recording timeouts
  */
 
 // ---------------------------------------------------------------------------
@@ -1415,6 +1416,188 @@ class DragontreeReolinkCamerasCard extends HTMLElement {
 customElements.define('dragontree-reolink-cameras', DragontreeReolinkCamerasCard);
 
 // ---------------------------------------------------------------------------
+// dragontree-reolink-timers
+// ---------------------------------------------------------------------------
+
+const TIMERS_STYLE = `
+  :host { display: block; }
+  .row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    min-height: 52px;
+    border-bottom: 1px solid var(--divider-color, #e0e0e0);
+  }
+  .row:last-of-type { border-bottom: none; }
+  .row-label { font-size: 1rem; color: var(--primary-text-color); }
+  .input-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+  input[type="text"] {
+    border: 1px solid var(--input-idle-line-color, var(--divider-color, #e0e0e0));
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 0.875rem;
+    background: transparent;
+    color: var(--primary-text-color);
+    width: 72px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+  input.error { border-color: var(--error-color, #db4437); }
+  .field-error {
+    font-size: 0.7rem;
+    color: var(--error-color, #db4437);
+    min-height: 1em;
+  }
+  .status-text {
+    padding: 4px 16px 16px;
+    font-size: 0.75rem;
+    color: var(--secondary-text-color, #888);
+    border-top: 1px solid var(--divider-color, #e0e0e0);
+  }
+`;
+
+const TIMERS_TEMPLATE = `
+  <style>${TIMERS_STYLE}</style>
+  <ha-card header="Default Timers">
+    <div class="row">
+      <span class="row-label">Live View Timeout</span>
+      <div class="input-wrap">
+        <input type="text" id="liveTimeout" placeholder="M:SS" maxlength="5">
+        <span class="field-error" id="liveErr"></span>
+      </div>
+    </div>
+    <div class="row">
+      <span class="row-label">Recording Timeout</span>
+      <div class="input-wrap">
+        <input type="text" id="recTimeout" placeholder="M:SS" maxlength="5">
+        <span class="field-error" id="recErr"></span>
+      </div>
+    </div>
+    <div class="status-text" id="statusText">Range: 0:15 – 10:00</div>
+  </ha-card>
+`;
+
+class DragontreeReolinkTimersCard extends HTMLElement {
+  static _MIN_SECS = 15;
+  static _MAX_SECS = 600;
+
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._hass = null;
+    this._initialized = false;
+    this._saving = false;
+  }
+
+  setConfig(config) { this._config = config; }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (!this._initialized) {
+      this._initialized = true;
+      this._build();
+    }
+  }
+
+  _build() {
+    this.shadowRoot.innerHTML = TIMERS_TEMPLATE;
+    this._loadConfig().then(() => this._bindEvents());
+  }
+
+  async _loadConfig() {
+    try {
+      const result = await this._hass.callWS({ type: 'dragontree_reolink/get_timer_config' });
+      this.shadowRoot.getElementById('liveTimeout').value =
+        this._secsToMmss(result.live_timeout_secs);
+      this.shadowRoot.getElementById('recTimeout').value =
+        this._secsToMmss(result.record_timeout_secs);
+    } catch (e) {
+      console.error('[reolink] Failed to load timer config:', e);
+    }
+  }
+
+  _bindEvents() {
+    const sr = this.shadowRoot;
+    const onLiveChange = () => this._onFieldChange('liveTimeout', 'liveErr');
+    const onRecChange  = () => this._onFieldChange('recTimeout', 'recErr');
+
+    sr.getElementById('liveTimeout').addEventListener('change', onLiveChange);
+    sr.getElementById('liveTimeout').addEventListener('blur', onLiveChange);
+    sr.getElementById('recTimeout').addEventListener('change', onRecChange);
+    sr.getElementById('recTimeout').addEventListener('blur', onRecChange);
+  }
+
+  _onFieldChange(inputId, errId) {
+    const sr = this.shadowRoot;
+    const input = sr.getElementById(inputId);
+    const errEl = sr.getElementById(errId);
+    const secs = this._mmssToSecs(input.value);
+
+    if (secs === null) {
+      input.classList.add('error');
+      errEl.textContent = 'Use M:SS format';
+      return;
+    }
+    if (secs < DragontreeReolinkTimersCard._MIN_SECS ||
+        secs > DragontreeReolinkTimersCard._MAX_SECS) {
+      input.classList.add('error');
+      errEl.textContent = '0:15 – 10:00';
+      return;
+    }
+
+    input.classList.remove('error');
+    errEl.textContent = '';
+    input.value = this._secsToMmss(secs); // normalize display
+    this._save();
+  }
+
+  async _save() {
+    if (this._saving) return;
+    const sr = this.shadowRoot;
+
+    const liveSecs = this._mmssToSecs(sr.getElementById('liveTimeout').value);
+    const recSecs  = this._mmssToSecs(sr.getElementById('recTimeout').value);
+    if (liveSecs === null || recSecs === null) return;
+    if (liveSecs < DragontreeReolinkTimersCard._MIN_SECS ||
+        liveSecs > DragontreeReolinkTimersCard._MAX_SECS ||
+        recSecs < DragontreeReolinkTimersCard._MIN_SECS ||
+        recSecs > DragontreeReolinkTimersCard._MAX_SECS) return;
+
+    this._saving = true;
+    try {
+      await this._hass.callWS({
+        type: 'dragontree_reolink/set_timer_config',
+        live_timeout_secs: liveSecs,
+        record_timeout_secs: recSecs,
+      });
+      const statusEl = sr.getElementById('statusText');
+      if (statusEl) {
+        statusEl.textContent = 'Saved.';
+        setTimeout(() => { statusEl.textContent = 'Range: 0:15 – 10:00'; }, 2000);
+      }
+    } catch (e) {
+      console.error('[reolink] Failed to save timer config:', e);
+    } finally {
+      this._saving = false;
+    }
+  }
+
+  _secsToMmss(secs) {
+    const s = Math.max(0, Math.round(secs));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  }
+
+  _mmssToSecs(str) {
+    const m = String(str).trim().match(/^(\d{1,2}):([0-5]\d)$/);
+    if (!m) return null;
+    return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+  }
+}
+
+customElements.define('dragontree-reolink-timers', DragontreeReolinkTimersCard);
+
+// ---------------------------------------------------------------------------
 // dragontree-reolink-live
 // ---------------------------------------------------------------------------
 
@@ -1785,10 +1968,19 @@ class DragontreeReolinkLiveCard extends HTMLElement {
   _build() {
     this.shadowRoot.innerHTML = LIVE_TEMPLATE;
     this._bindStaticEvents();
-    this._loadCameras().then(() => {
+    Promise.all([this._loadCameras(), this._loadTimerConfig()]).then(() => {
       this._renderCameraList();
       this._subscribeRecordTimerEvent();
     });
+  }
+
+  async _loadTimerConfig() {
+    try {
+      const result = await this._hass.callWS({ type: 'dragontree_reolink/get_timer_config' });
+      if (result.live_timeout_secs) this._liveTimeoutSecs = result.live_timeout_secs;
+    } catch (e) {
+      // falls back to card config value / default
+    }
   }
 
   async _loadCameras() {

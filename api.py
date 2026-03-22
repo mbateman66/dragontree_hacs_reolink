@@ -41,6 +41,8 @@ def async_register_ws_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_get_schedule)
     websocket_api.async_register_command(hass, ws_set_schedule)
     websocket_api.async_register_command(hass, ws_get_record_timers)
+    websocket_api.async_register_command(hass, ws_get_timer_config)
+    websocket_api.async_register_command(hass, ws_set_timer_config)
 
 
 @websocket_api.websocket_command(
@@ -216,5 +218,48 @@ async def ws_set_schedule(
 
     await runtime_data.coordinator.async_set_schedule(
         msg["enabled"], msg["start_time"], msg["stop_time"]
+    )
+    connection.send_result(msg["id"], {})
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): f"{DOMAIN}/get_timer_config"}
+)
+@websocket_api.async_response
+async def ws_get_timer_config(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """Return the current live-view and recording timeout settings."""
+    runtime_data: DragontreeReolinkData | None = hass.data.get(DOMAIN)
+    if runtime_data is None:
+        connection.send_error(msg["id"], "not_ready", "Coordinator not available")
+        return
+
+    connection.send_result(msg["id"], runtime_data.coordinator.async_get_timer_config())
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/set_timer_config",
+        vol.Required("live_timeout_secs"): vol.All(int, vol.Range(min=15, max=600)),
+        vol.Required("record_timeout_secs"): vol.All(int, vol.Range(min=15, max=600)),
+    }
+)
+@websocket_api.async_response
+async def ws_set_timer_config(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """Update live-view and recording timeout settings."""
+    runtime_data: DragontreeReolinkData | None = hass.data.get(DOMAIN)
+    if runtime_data is None:
+        connection.send_error(msg["id"], "not_ready", "Coordinator not available")
+        return
+
+    await runtime_data.coordinator.async_set_timer_config(
+        msg["live_timeout_secs"], msg["record_timeout_secs"]
     )
     connection.send_result(msg["id"], {})
