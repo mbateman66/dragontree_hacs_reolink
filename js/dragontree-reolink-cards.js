@@ -1706,11 +1706,10 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     this._recTimeoutSecs  = DragontreeReolinkLiveCard._DEFAULT_REC_TIMEOUT;
     this._recSecondsLeft  = 0;
     this._recTimerInterval = null;
+    this._recStateOptimistic = null; // null = use entity state, true/false = optimistic
 
     this._pendingRecordings = [];
     this._unsubEvents = null;
-
-    this._suppressedUntil = {};
   }
 
   setConfig(config) {
@@ -1819,13 +1818,27 @@ class DragontreeReolinkLiveCard extends HTMLElement {
       if (!this._selectedCamera?.record_entity_id) return;
       const entityId = this._selectedCamera.record_entity_id;
       const isOn = this._hass.states[entityId]?.state === 'on';
-      this._suppressSync(entityId);
+      // Optimistic UI update — don't wait for the HA state round-trip
+      this._recStateOptimistic = !isOn;
+      if (isOn) {
+        this._stopRecordingTimer();
+      } else {
+        this._startRecordingTimer(new Date());
+      }
+      this._updateRecordButton();
+      this._updateTimerDisplay();
+      this._updateControlsStatus();
       try {
         await this._hass.callService('switch', isOn ? 'turn_off' : 'turn_on',
           { entity_id: entityId });
       } catch (e) {
         console.error('[reolink-live] Failed to toggle recording:', e);
-        delete this._suppressedUntil[entityId];
+        // Revert optimistic state
+        this._recStateOptimistic = null;
+        if (!isOn) this._stopRecordingTimer();
+        this._updateRecordButton();
+        this._updateTimerDisplay();
+        this._updateControlsStatus();
       }
     });
   }
@@ -1952,13 +1965,15 @@ class DragontreeReolinkLiveCard extends HTMLElement {
   async _stopManualRecording() {
     this._stopRecordingTimer();
     if (!this._selectedCamera?.record_entity_id) return;
-    const entityId = this._selectedCamera.record_entity_id;
-    this._suppressSync(entityId);
+    this._recStateOptimistic = false;
+    this._updateRecordButton();
+    this._updateControlsStatus();
     try {
-      await this._hass.callService('switch', 'turn_off', { entity_id: entityId });
+      await this._hass.callService('switch', 'turn_off',
+        { entity_id: this._selectedCamera.record_entity_id });
     } catch (e) {
       console.error('[reolink-live] Failed to auto-stop recording:', e);
-      delete this._suppressedUntil[entityId];
+      this._recStateOptimistic = null;
     }
   }
 
@@ -1967,8 +1982,6 @@ class DragontreeReolinkLiveCard extends HTMLElement {
   _syncRecordingState(prev) {
     if (!this._selectedCamera?.record_entity_id) return;
     const entityId = this._selectedCamera.record_entity_id;
-    if ((this._suppressedUntil[entityId] || 0) > Date.now()) return;
-
     const prevState = prev?.states[entityId];
     const currState = this._hass.states[entityId];
     if (!currState) return;
@@ -1976,20 +1989,24 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     const isOn = currState.state === 'on';
     const wasOn = prevState?.state === 'on';
 
+    // Real state has arrived — clear optimistic override
+    this._recStateOptimistic = null;
+
     if (isOn && !wasOn) {
+      // Restart timer using accurate last_changed timestamp from HA
       const startedAt = currState.last_changed ? new Date(currState.last_changed) : new Date();
       this._startRecordingTimer(startedAt);
     } else if (!isOn && wasOn) {
       this._stopRecordingTimer();
+    } else if (isOn && this._recTimerInterval === null) {
+      // Already recording when camera was selected — start timer from last_changed
+      const startedAt = currState.last_changed ? new Date(currState.last_changed) : new Date();
+      this._startRecordingTimer(startedAt);
     }
 
     this._updateRecordButton();
     this._updateTimerDisplay();
     this._updateControlsStatus();
-  }
-
-  _suppressSync(entityId, ms = 3000) {
-    this._suppressedUntil[entityId] = Date.now() + ms;
   }
 
   // ── UI rendering ──────────────────────────────────────────────────────────
@@ -2175,6 +2192,9 @@ class DragontreeReolinkLiveCard extends HTMLElement {
 
   _isManualRecording(cam) {
     if (!cam?.record_entity_id) return false;
+    if (cam.name === this._selectedCamera?.name && this._recStateOptimistic !== null) {
+      return this._recStateOptimistic;
+    }
     return this._hass?.states[cam.record_entity_id]?.state === 'on';
   }
 
