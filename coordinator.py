@@ -34,10 +34,12 @@ from .const import (
     DEFAULT_STREAM,
     DOMAIN,
     EVENT_QUEUE_CHANGED,
+    EVENT_RECORD_TIMER_CHANGED,
     EVENT_RECORDING_ADDED,
     INIT_LOOKBACK_DAYS,
     INIT_RECORDINGS_PER_CAMERA,
     LOGGER,
+    MANUAL_REC_TIMEOUT_SECS,
     MEDIA_BASE_DIR,
     MIN_RECORDING_AGE_S,
     POLL_INTERVAL,
@@ -194,6 +196,11 @@ class ReolinkDownloadCoordinator:
         self._schedule_store: Store | None = None
         self._schedule_unsubs: list = []
 
+        # Manual recording timers — keyed by camera name
+        # Each entry: {"started_at": datetime, "task": asyncio.Task, "entity_id": str}
+        self._manual_rec_timers: dict[str, dict] = {}
+        self._manual_rec_state_unsub: Any = None
+
     # ------------------------------------------------------------------ #
     # Public properties (read by sensors)                                  #
     # ------------------------------------------------------------------ #
@@ -247,6 +254,9 @@ class ReolinkDownloadCoordinator:
         self._schedule = await self._schedule_store.async_load() or {}
         self._setup_schedule_timers()
 
+        # Watch manual_record switches for server-side timer management
+        self._setup_manual_rec_tracking()
+
         # Generate thumbnails for recordings that don't have them yet
         self.hass.async_create_background_task(
             self._backfill_thumbnails(), name="dragontree_reolink_thumb_backfill"
@@ -263,6 +273,13 @@ class ReolinkDownloadCoordinator:
         for unsub in self._schedule_unsubs:
             unsub()
         self._schedule_unsubs.clear()
+
+        if self._manual_rec_state_unsub:
+            self._manual_rec_state_unsub()
+            self._manual_rec_state_unsub = None
+        for entry in self._manual_rec_timers.values():
+            entry["task"].cancel()
+        self._manual_rec_timers.clear()
 
         if self._worker_task:
             self._worker_task.cancel()
@@ -800,6 +817,109 @@ class ReolinkDownloadCoordinator:
                 "Disk limit (%.2f GB) cannot fully accommodate a %.1f MB recording",
                 self.max_disk_bytes / 1024**3, needed_bytes / 1024**2,
             )
+
+    # ------------------------------------------------------------------ #
+    # Manual recording timers                                             #
+    # ------------------------------------------------------------------ #
+
+    @callback
+    def _setup_manual_rec_tracking(self) -> None:
+        """Listen to all state changes and watch for manual_record switches."""
+        if self._manual_rec_state_unsub:
+            return
+
+        @callback
+        def _on_state_changed(event: Any) -> None:
+            entity_id: str = event.data.get("entity_id", "")
+            if not entity_id.endswith("_manual_record"):
+                return
+            old_state = event.data.get("old_state")
+            new_state = event.data.get("new_state")
+            if new_state is None:
+                return
+
+            cam_name = self._camera_name_for_entity(entity_id)
+            if not cam_name:
+                return
+
+            was_on = old_state is not None and old_state.state == "on"
+            is_on = new_state.state == "on"
+
+            if is_on and not was_on:
+                self._start_manual_rec_timer(cam_name, entity_id)
+            elif not is_on and was_on:
+                self._stop_manual_rec_timer(cam_name)
+
+        self._manual_rec_state_unsub = self.hass.bus.async_listen(
+            "state_changed", _on_state_changed
+        )
+
+    def _camera_name_for_entity(self, entity_id: str) -> str | None:
+        """Return the camera name whose slug appears in the given entity_id, or None."""
+        cam_slugs = self._collect_cam_slugs()
+        for slug, name in cam_slugs.items():
+            if slug in entity_id:
+                return name
+        return None
+
+    def _start_manual_rec_timer(self, cam_name: str, entity_id: str) -> None:
+        """Start a server-side countdown for a manual recording."""
+        self._stop_manual_rec_timer(cam_name)  # cancel any existing timer first
+
+        started_at = dt_util.utcnow()
+        task = self.hass.async_create_background_task(
+            self._manual_rec_timeout_task(cam_name, entity_id, MANUAL_REC_TIMEOUT_SECS),
+            name=f"dragontree_reolink_rec_timer_{cam_name}",
+        )
+        self._manual_rec_timers[cam_name] = {
+            "started_at": started_at,
+            "task": task,
+            "entity_id": entity_id,
+        }
+        self.hass.bus.async_fire(EVENT_RECORD_TIMER_CHANGED, {
+            "camera": cam_name,
+            "action": "started",
+            "started_at": started_at.isoformat(),
+            "timeout_secs": MANUAL_REC_TIMEOUT_SECS,
+        })
+        LOGGER.info("Manual recording timer started for %s (%ds)", cam_name, MANUAL_REC_TIMEOUT_SECS)
+
+    def _stop_manual_rec_timer(self, cam_name: str) -> None:
+        """Cancel any running timer for the given camera and notify the frontend."""
+        entry = self._manual_rec_timers.pop(cam_name, None)
+        if entry:
+            entry["task"].cancel()
+        self.hass.bus.async_fire(EVENT_RECORD_TIMER_CHANGED, {
+            "camera": cam_name,
+            "action": "stopped",
+        })
+
+    async def _manual_rec_timeout_task(
+        self, cam_name: str, entity_id: str, timeout_secs: int
+    ) -> None:
+        """Wait timeout_secs then turn off the manual record switch."""
+        try:
+            await asyncio.sleep(timeout_secs)
+            LOGGER.info("Manual recording timed out for %s — stopping", cam_name)
+            await self.hass.services.async_call(
+                "switch", "turn_off", {"entity_id": entity_id}, blocking=False
+            )
+            # State change will trigger _stop_manual_rec_timer via the listener
+        except asyncio.CancelledError:
+            pass  # Stopped manually or integration unloaded
+
+    def get_record_timers(self) -> dict[str, dict]:
+        """Return current timer state for all cameras with active manual recordings."""
+        now = dt_util.utcnow()
+        result = {}
+        for cam_name, entry in self._manual_rec_timers.items():
+            elapsed = (now - entry["started_at"]).total_seconds()
+            result[cam_name] = {
+                "started_at": entry["started_at"].isoformat(),
+                "timeout_secs": MANUAL_REC_TIMEOUT_SECS,
+                "seconds_remaining": max(0, MANUAL_REC_TIMEOUT_SECS - elapsed),
+            }
+        return result
 
     # ------------------------------------------------------------------ #
     # Camera schedule                                                      #
