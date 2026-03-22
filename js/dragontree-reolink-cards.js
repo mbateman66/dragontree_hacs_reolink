@@ -1462,6 +1462,34 @@ const LIVE_STYLE = `
     width: 100%;
     height: 100%;
   }
+  #liveWrapper:fullscreen {
+    background: #000;
+    width: 100vw;
+    height: 100vh;
+  }
+  #liveWrapper:fullscreen ha-camera-stream {
+    width: 100%;
+    height: 100%;
+  }
+  #liveWrapper:fullscreen .fs-exit-btn {
+    display: flex;
+  }
+  .fs-exit-btn {
+    display: none;
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 10;
+    background: rgba(0, 0, 0, 0.5);
+    border: none;
+    border-radius: 4px;
+    color: #fff;
+    padding: 6px;
+    cursor: pointer;
+    align-items: center;
+    justify-content: center;
+  }
+  .fs-exit-btn:hover { background: rgba(0, 0, 0, 0.75); }
   .no-selection, .paused-overlay {
     color: #888;
     font-size: 0.9em;
@@ -1656,6 +1684,9 @@ const LIVE_TEMPLATE = `
     <div class="player-panel">
       <div class="live-wrapper" id="liveWrapper">
         <div class="no-selection">Select a camera to view</div>
+        <button class="fs-exit-btn" id="btnExitFs">
+          <ha-icon icon="mdi:fullscreen-exit" style="--mdc-icon-size:20px"></ha-icon>
+        </button>
       </div>
     </div>
 
@@ -1673,6 +1704,10 @@ const LIVE_TEMPLATE = `
             Record
           </button>
           <span class="timer-display" id="timerRec">--:--</span>
+          <button class="ctrl-btn" id="btnFullscreen" disabled>
+            <ha-icon icon="mdi:fullscreen" style="--mdc-icon-size:16px"></ha-icon>
+            Fullscreen
+          </button>
         </div>
         <div class="rec-status" id="recStatus"></div>
       </div>
@@ -1778,6 +1813,13 @@ class DragontreeReolinkLiveCard extends HTMLElement {
       } else if (this._selectedCamera) {
         this._startLive();
       }
+    });
+
+    sr.getElementById('btnFullscreen').addEventListener('click', () => this._toggleFullscreen());
+    sr.getElementById('btnExitFs').addEventListener('click', () => document.exitFullscreen());
+
+    sr.getElementById('liveWrapper').addEventListener('fullscreenchange', () => {
+      this._updateFullscreenButton();
     });
 
     sr.getElementById('btnRecord').addEventListener('click', async () => {
@@ -2067,6 +2109,28 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     } else {
       btn.innerHTML = '<ha-icon icon="mdi:play" style="--mdc-icon-size:16px"></ha-icon> Start';
       btn.classList.remove('live');
+    }
+    this._updateFullscreenButton();
+  }
+
+  _toggleFullscreen() {
+    const wrapper = this.shadowRoot.getElementById('liveWrapper');
+    if (!wrapper) return;
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      wrapper.requestFullscreen();
+    }
+  }
+
+  _updateFullscreenButton() {
+    const btn = this.shadowRoot.getElementById('btnFullscreen');
+    if (!btn) return;
+    btn.disabled = !this._isLive;
+    if (document.fullscreenElement) {
+      btn.innerHTML = '<ha-icon icon="mdi:fullscreen-exit" style="--mdc-icon-size:16px"></ha-icon> Exit';
+    } else {
+      btn.innerHTML = '<ha-icon icon="mdi:fullscreen" style="--mdc-icon-size:16px"></ha-icon> Fullscreen';
     }
   }
 
