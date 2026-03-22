@@ -75,6 +75,9 @@ const STYLE = `
       aspect-ratio: 16 / 9;
       flex: none; /* size from aspect-ratio, not flex */
     }
+    #videoContent {
+      bottom: 56px; /* leave room for seek bar + controls overlay */
+    }
   }
 
   /* ── Player ── */
@@ -1742,6 +1745,9 @@ const LIVE_STYLE = `
     .live-wrapper {
       aspect-ratio: 16 / 9;
       flex: none;
+    }
+    #streamContent {
+      bottom: 40px; /* leave room for controls overlay */
     }
   }
 
