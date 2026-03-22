@@ -51,10 +51,10 @@ function parseTriggers(triggersJson) {
 }
 
 // ---------------------------------------------------------------------------
-// dragontree-reolink-playback
+// Shared player layout CSS and mixin
 // ---------------------------------------------------------------------------
 
-const STYLE = `
+const PLAYER_STYLE = `
   :host { display: block; }
 
   .container {
@@ -64,36 +64,7 @@ const STYLE = `
     height: 70vh;
     min-height: 420px;
   }
-  @media (max-width: 800px) {
-    .container {
-      grid-template-columns: 1fr;
-      grid-template-rows: auto 1fr;
-      height: calc(100dvh - 56px); /* 56px = HA header height */
-      min-height: 400px;
-    }
-    .video-wrapper {
-      flex: none;
-      display: flex;
-      flex-direction: column;
-    }
-    #videoContent {
-      position: relative;
-      aspect-ratio: 16 / 9;
-      width: 100%;
-      flex-shrink: 0;
-    }
-    #videoContent video {
-      position: absolute;
-      inset: 0;
-    }
-    .video-overlay {
-      position: relative;
-      background: rgba(0, 0, 0, 0.9);
-      padding: 6px 12px 8px;
-    }
-  }
 
-  /* ── Player ── */
   .player-panel {
     display: flex;
     flex-direction: column;
@@ -102,67 +73,65 @@ const STYLE = `
     overflow: hidden;
     min-height: 0;
   }
-  .video-wrapper {
+
+  /* Video area fills remaining panel height on desktop */
+  .video-area {
     flex: 1;
     min-height: 0;
     position: relative;
-  }
-  #videoWrapper:fullscreen,
-  #videoWrapper.fake-fullscreen {
     background: #000;
-    position: fixed;
-    inset: 0;
-    z-index: 9999;
-    border-radius: 0;
-    width: 100vw;
-    height: 100vh;
   }
-  #videoContent {
+
+  /* Any direct child of video-area fills it absolutely */
+  .video-area > * {
     position: absolute;
     inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-  #videoContent video {
     width: 100%;
     height: 100%;
+  }
+
+  /* For <video> specifically */
+  .video-area > video {
     object-fit: contain;
     display: block;
   }
-  .no-selection {
+
+  .no-selection, .paused-overlay {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
     color: #888;
     font-size: 0.9em;
     text-align: center;
     padding: 24px;
+    gap: 8px;
   }
-  .video-overlay {
-    display: none;
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    background: linear-gradient(transparent, rgba(0, 0, 0, 0.72));
-    padding: 28px 12px 10px;
-    z-index: 5;
-  }
-  .video-overlay.visible { display: block; }
-  .seek-bar {
-    width: 100%;
-    margin-bottom: 6px;
-    accent-color: #fff;
-    cursor: pointer;
-    height: 4px;
-  }
-  .overlay-controls {
+
+  .paused-overlay ha-icon { --mdc-icon-size: 48px; color: #555; }
+
+  /* Controls bar sits below video, always visible */
+  .controls-bar {
+    flex-shrink: 0;
+    background: #1a1a1a;
+    padding: 8px 12px;
     display: flex;
-    align-items: center;
+    flex-direction: column;
     gap: 6px;
   }
-  .overlay-spacer { flex: 1; }
+
+  .controls-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .ctrl-spacer { flex: 1; }
+
+  /* Buttons — dark theme for the controls bar */
   .ctrl-btn {
-    background: rgba(255, 255, 255, 0.15);
-    border: 1px solid rgba(255, 255, 255, 0.25);
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.22);
     color: #fff;
     padding: 5px 10px;
     border-radius: 4px;
@@ -174,11 +143,36 @@ const STYLE = `
     transition: background 0.15s;
     white-space: nowrap;
   }
-  .ctrl-btn:hover:not([disabled]) { background: rgba(255, 255, 255, 0.28); }
+  .ctrl-btn:hover:not([disabled]) { background: rgba(255,255,255,0.25); }
   .ctrl-btn[disabled] { opacity: 0.35; cursor: default; }
   .ctrl-btn.icon-only { padding: 5px; }
+  .ctrl-btn.active {
+    background: var(--primary-color, #03a9f4);
+    border-color: var(--primary-color, #03a9f4);
+  }
+  .ctrl-btn.danger { background: #c62828; border-color: #c62828; }
 
-  /* ── Right panel ── */
+  /* Timers */
+  .timer {
+    font-size: 0.85em;
+    font-variant-numeric: tabular-nums;
+    color: rgba(255,255,255,0.45);
+    min-width: 36px;
+    white-space: nowrap;
+  }
+  .timer.active { color: #fff; }
+  .timer.urgent { color: #ef5350; }
+  .timer.rec { color: #ef9a9a; }
+
+  /* Seek bar */
+  .seek-bar {
+    width: 100%;
+    accent-color: #fff;
+    cursor: pointer;
+    height: 4px;
+  }
+
+  /* Right panel */
   .right-panel {
     display: flex;
     flex-direction: column;
@@ -187,6 +181,114 @@ const STYLE = `
     overflow: hidden;
   }
 
+  .list-panel {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    background: var(--card-background-color, #fff);
+    border-radius: 8px;
+    border: 1px solid var(--divider-color, #e0e0e0);
+  }
+
+  .list-msg {
+    padding: 24px;
+    text-align: center;
+    color: var(--secondary-text-color, #888);
+    font-size: 0.88em;
+  }
+
+  /* Mobile: stack vertically, video-area is 16:9 block */
+  @media (max-width: 800px) {
+    .container {
+      grid-template-columns: 1fr;
+      grid-template-rows: auto 1fr;
+      height: calc(100dvh - 56px);
+      min-height: 400px;
+    }
+    .video-area {
+      flex: none;
+      aspect-ratio: 16 / 9;
+    }
+  }
+
+  /* Fullscreen — player panel fills screen, video-area flexes to fill remaining */
+  #playerPanel.fake-fullscreen {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    border-radius: 0;
+  }
+  #playerPanel:fullscreen .video-area,
+  #playerPanel.fake-fullscreen .video-area {
+    flex: 1;
+    aspect-ratio: unset;
+  }
+`;
+
+const PlayerMixin = {
+  _initPlayer() {
+    this._fakeFullscreen = false;
+    const s = localStorage.getItem('dragontree_reolink_muted');
+    this._muted = s === null ? true : s === 'true';
+  },
+  _bindPlayerButtons() {
+    const sr = this.shadowRoot;
+    sr.getElementById('btnMute').addEventListener('click', () => this._toggleMute());
+    sr.getElementById('btnFullscreen').addEventListener('click', () => this._toggleFullscreen());
+    sr.getElementById('playerPanel').addEventListener('fullscreenchange', () => this._updateFullscreenButton());
+  },
+  _toggleMute() {
+    this._muted = !this._muted;
+    localStorage.setItem('dragontree_reolink_muted', this._muted);
+    this._applyMute();
+    this._updateMuteButton();
+  },
+  _updateMuteButton() {
+    const btn = this.shadowRoot.getElementById('btnMute');
+    if (!btn) return;
+    btn.innerHTML = `<ha-icon icon="${this._muted ? 'mdi:volume-off' : 'mdi:volume-high'}" style="--mdc-icon-size:18px"></ha-icon>`;
+  },
+  _toggleFullscreen() {
+    const panel = this.shadowRoot.getElementById('playerPanel');
+    if (!panel) return;
+    if (document.fullscreenElement || this._fakeFullscreen) {
+      if (document.fullscreenElement) document.exitFullscreen();
+      if (this._fakeFullscreen) {
+        this._fakeFullscreen = false;
+        panel.classList.remove('fake-fullscreen');
+        this._updateFullscreenButton();
+      }
+    } else if (panel.requestFullscreen) {
+      panel.requestFullscreen().catch(() => {
+        this._fakeFullscreen = true;
+        panel.classList.add('fake-fullscreen');
+        this._updateFullscreenButton();
+      });
+    } else {
+      this._fakeFullscreen = true;
+      panel.classList.add('fake-fullscreen');
+      this._updateFullscreenButton();
+    }
+  },
+  _updateFullscreenButton() {
+    const btn = this.shadowRoot.getElementById('btnFullscreen');
+    if (!btn) return;
+    const isFs = !!document.fullscreenElement || this._fakeFullscreen;
+    btn.innerHTML = `<ha-icon icon="${isFs ? 'mdi:fullscreen-exit' : 'mdi:fullscreen'}" style="--mdc-icon-size:18px"></ha-icon>`;
+  },
+  _escHtml(str) {
+    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  },
+  _escAttr(str) {
+    return String(str).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  },
+};
+
+// ---------------------------------------------------------------------------
+// dragontree-reolink-playback
+// ---------------------------------------------------------------------------
+
+const STYLE = PLAYER_STYLE + `
   /* ── Filter ── */
   .filter-panel {
     background: var(--card-background-color, #fff);
@@ -242,20 +344,6 @@ const STYLE = `
     color: var(--primary-text-color, #212121);
   }
   /* ── Recording list ── */
-  .list-panel {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    background: var(--card-background-color, #fff);
-    border-radius: 8px;
-    border: 1px solid var(--divider-color, #e0e0e0);
-  }
-  .list-msg {
-    padding: 24px;
-    text-align: center;
-    color: var(--secondary-text-color, #888);
-    font-size: 0.88em;
-  }
   .rec-item {
     display: flex;
     align-items: center;
@@ -371,24 +459,22 @@ const TEMPLATE = `
   <style>${STYLE}</style>
   <div class="container">
 
-    <div class="player-panel">
-      <div class="video-wrapper" id="videoWrapper">
-        <div id="videoContent">
-          <div class="no-selection">Select a recording to play</div>
-        </div>
-        <div class="video-overlay" id="videoOverlay">
-          <input type="range" class="seek-bar" id="seekBar" value="0" min="0" max="100" step="0.1">
-          <div class="overlay-controls">
-            <button class="ctrl-btn" id="btnPrev" disabled>&#9664; Prev</button>
-            <button class="ctrl-btn" id="btnNext" disabled>Next &#9654;</button>
-            <div class="overlay-spacer"></div>
-            <button class="ctrl-btn icon-only" id="btnMute">
-              <ha-icon icon="mdi:volume-high" style="--mdc-icon-size:18px"></ha-icon>
-            </button>
-            <button class="ctrl-btn icon-only" id="btnFullscreen">
-              <ha-icon icon="mdi:fullscreen" style="--mdc-icon-size:18px"></ha-icon>
-            </button>
-          </div>
+    <div class="player-panel" id="playerPanel">
+      <div class="video-area" id="videoArea">
+        <div class="no-selection">Select a recording to play</div>
+      </div>
+      <div class="controls-bar" id="controlsBar">
+        <input type="range" class="seek-bar" id="seekBar" value="0" min="0" max="100" step="0.1">
+        <div class="controls-row">
+          <button class="ctrl-btn" id="btnPrev" disabled>&#9664; Prev</button>
+          <button class="ctrl-btn" id="btnNext" disabled>Next &#9654;</button>
+          <div class="ctrl-spacer"></div>
+          <button class="ctrl-btn icon-only" id="btnMute">
+            <ha-icon icon="mdi:volume-high" style="--mdc-icon-size:18px"></ha-icon>
+          </button>
+          <button class="ctrl-btn icon-only" id="btnFullscreen">
+            <ha-icon icon="mdi:fullscreen" style="--mdc-icon-size:18px"></ha-icon>
+          </button>
         </div>
       </div>
     </div>
@@ -440,13 +526,12 @@ class DragontreeReolinkPlayback extends HTMLElement {
     this._thumbCache = new Map(); // content_id → resolved URL
     this._unsubRecordingEvents = null;
     this._hasMore = true;
-    this._fakeFullscreen = false;
-    const stored = localStorage.getItem('dragontree_reolink_muted');
-    this._muted = stored === null ? true : stored === 'true';
     this._loadingMore = false;
     this._totalRecEntityId = null;  // sensor.dragontree_reolink_total_recordings
     this._lastTotalRec = null;      // last seen value of the sensor
     this._refreshTimer = null;      // debounce handle
+    // PlayerMixin state
+    this._initPlayer();
   }
 
   _saveFilters() {
@@ -736,12 +821,8 @@ class DragontreeReolinkPlayback extends HTMLElement {
       if (i !== -1) this._selectRecording(i);
     });
 
-    sr.getElementById('btnMute').addEventListener('click', () => this._toggleMute());
-    sr.getElementById('btnFullscreen').addEventListener('click', () => this._toggleFullscreen());
-
-    sr.getElementById('videoWrapper').addEventListener('fullscreenchange', () => {
-      this._updateFullscreenButton();
-    });
+    // PlayerMixin shared button bindings (mute + fullscreen)
+    this._bindPlayerButtons();
   }
 
   // ── Filter UI rendering ───────────────────────────────────────────────────
@@ -917,16 +998,21 @@ class DragontreeReolinkPlayback extends HTMLElement {
       this._playUrl(resolved.url);
     } catch (e) {
       console.error('[reolink] Failed to resolve media URL for', rec.content_id, e);
-      const content = this.shadowRoot.getElementById('videoContent');
-      if (content) content.innerHTML = `<div class="no-selection">Could not load video</div>`;
+      const videoArea = this.shadowRoot.getElementById('videoArea');
+      if (videoArea) videoArea.innerHTML = `<div class="no-selection">Could not load video</div>`;
     }
   }
 
+  _applyMute() {
+    const video = this.shadowRoot.getElementById('videoArea')?.querySelector('video');
+    if (video) video.muted = this._muted;
+  }
+
   _playUrl(url) {
-    const content = this.shadowRoot.getElementById('videoContent');
-    if (!content) return;
-    content.innerHTML = `<video autoplay playsinline src="${url}"></video>`;
-    const video = content.querySelector('video');
+    const videoArea = this.shadowRoot.getElementById('videoArea');
+    if (!videoArea) return;
+    videoArea.innerHTML = `<video autoplay playsinline src="${url}"></video>`;
+    const video = videoArea.querySelector('video');
     video.muted = this._muted;
 
     const seekBar = this.shadowRoot.getElementById('seekBar');
@@ -946,54 +1032,7 @@ class DragontreeReolinkPlayback extends HTMLElement {
       const i = this._newerIndex();
       if (i !== -1) this._selectRecording(i);
     });
-    this.shadowRoot.getElementById('videoOverlay')?.classList.add('visible');
     this._updateMuteButton();
-  }
-
-  // ── Playback overlay controls ─────────────────────────────────────────────
-
-  _toggleMute() {
-    this._muted = !this._muted;
-    localStorage.setItem('dragontree_reolink_muted', this._muted);
-    const video = this.shadowRoot.getElementById('videoContent')?.querySelector('video');
-    if (video) video.muted = this._muted;
-    this._updateMuteButton();
-  }
-
-  _updateMuteButton() {
-    const btn = this.shadowRoot.getElementById('btnMute');
-    if (!btn) return;
-    btn.innerHTML = `<ha-icon icon="${this._muted ? 'mdi:volume-off' : 'mdi:volume-high'}" style="--mdc-icon-size:18px"></ha-icon>`;
-  }
-
-  _toggleFullscreen() {
-    const wrapper = this.shadowRoot.getElementById('videoWrapper');
-    if (!wrapper) return;
-    if (document.fullscreenElement || this._fakeFullscreen) {
-      if (document.fullscreenElement) document.exitFullscreen();
-      if (this._fakeFullscreen) {
-        this._fakeFullscreen = false;
-        wrapper.classList.remove('fake-fullscreen');
-        this._updateFullscreenButton();
-      }
-    } else if (wrapper.requestFullscreen) {
-      wrapper.requestFullscreen().catch(() => {
-        this._fakeFullscreen = true;
-        wrapper.classList.add('fake-fullscreen');
-        this._updateFullscreenButton();
-      });
-    } else {
-      this._fakeFullscreen = true;
-      wrapper.classList.add('fake-fullscreen');
-      this._updateFullscreenButton();
-    }
-  }
-
-  _updateFullscreenButton() {
-    const btn = this.shadowRoot.getElementById('btnFullscreen');
-    if (!btn) return;
-    const isFs = !!document.fullscreenElement || this._fakeFullscreen;
-    btn.innerHTML = `<ha-icon icon="${isFs ? 'mdi:fullscreen-exit' : 'mdi:fullscreen'}" style="--mdc-icon-size:18px"></ha-icon>`;
   }
 
   // ── Time-direction helpers ────────────────────────────────────────────────
@@ -1044,21 +1083,10 @@ class DragontreeReolinkPlayback extends HTMLElement {
       }).catch(() => { /* no thumbnail available */ });
     });
   }
-
-  // ── Utility ───────────────────────────────────────────────────────────────
-
-  _escAttr(str) {
-    return String(str).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-  }
-
-  _escHtml(str) {
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
-  }
 }
+
+// Mix in shared player methods
+Object.assign(DragontreeReolinkPlayback.prototype, PlayerMixin);
 
 customElements.define('dragontree-reolink-playback', DragontreeReolinkPlayback);
 
@@ -1738,175 +1766,8 @@ customElements.define('dragontree-reolink-timers', DragontreeReolinkTimersCard);
 // dragontree-reolink-live
 // ---------------------------------------------------------------------------
 
-const LIVE_STYLE = `
-  :host { display: block; }
-
-  .container {
-    display: grid;
-    grid-template-columns: 1fr 380px;
-    gap: 12px;
-    height: 70vh;
-    min-height: 420px;
-  }
-  @media (max-width: 800px) {
-    .container {
-      grid-template-columns: 1fr;
-      grid-template-rows: auto 1fr;
-      height: calc(100dvh - 56px);
-      min-height: 400px;
-    }
-    .live-wrapper {
-      flex: none;
-      display: flex;
-      flex-direction: column;
-    }
-    #streamContent {
-      position: relative;
-      aspect-ratio: 16 / 9;
-      width: 100%;
-      flex-shrink: 0;
-    }
-    #streamContent ha-camera-stream {
-      position: absolute;
-      inset: 0;
-    }
-    .stream-overlay {
-      position: relative;
-      background: rgba(0, 0, 0, 0.9);
-      padding: 8px 12px;
-    }
-  }
-
-  /* ── Player panel ── */
-  .player-panel {
-    display: flex;
-    flex-direction: column;
-    background: #000;
-    border-radius: 8px;
-    overflow: hidden;
-    min-height: 0;
-  }
-  .live-wrapper {
-    flex: 1;
-    min-height: 0;
-    position: relative;
-  }
-  #liveWrapper:fullscreen,
-  #liveWrapper.fake-fullscreen {
-    background: #000;
-    position: fixed;
-    inset: 0;
-    z-index: 9999;
-    border-radius: 0;
-    width: 100vw;
-    height: 100vh;
-  }
-
-  /* ── Stream content (video / placeholder) ── */
-  #streamContent {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-  #streamContent ha-camera-stream {
-    width: 100%;
-    height: 100%;
-  }
-  .no-selection, .paused-overlay {
-    color: #888;
-    font-size: 0.9em;
-    text-align: center;
-    padding: 24px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 8px;
-  }
-  .paused-overlay ha-icon {
-    --mdc-icon-size: 48px;
-    color: #555;
-  }
-
-  /* ── Stream overlay controls ── */
-  .stream-overlay {
-    display: none;
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    background: linear-gradient(transparent, rgba(0, 0, 0, 0.72));
-    padding: 28px 12px 10px;
-    z-index: 5;
-  }
-  .stream-overlay.visible { display: block; }
-  .overlay-controls {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .overlay-spacer { flex: 1; }
-  .ctrl-btn {
-    background: rgba(255, 255, 255, 0.15);
-    border: 1px solid rgba(255, 255, 255, 0.25);
-    color: #fff;
-    padding: 5px 10px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 0.82em;
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    transition: background 0.15s;
-    white-space: nowrap;
-  }
-  .ctrl-btn:hover:not([disabled]) { background: rgba(255, 255, 255, 0.28); }
-  .ctrl-btn[disabled] { opacity: 0.35; cursor: default; }
-  .ctrl-btn.icon-only { padding: 5px; }
-  .ctrl-btn.live {
-    background: var(--primary-color, #03a9f4);
-    border-color: var(--primary-color, #03a9f4);
-  }
-  .ctrl-btn.recording-active {
-    background: #c62828;
-    border-color: #c62828;
-  }
-  .timer-display {
-    font-size: 0.88em;
-    font-variant-numeric: tabular-nums;
-    color: rgba(255, 255, 255, 0.55);
-    font-weight: 500;
-    min-width: 36px;
-    white-space: nowrap;
-  }
-  .timer-display.active { color: #fff; }
-  .timer-display.urgent { color: #ef5350; }
-  .timer-display.recording { color: #ef9a9a; }
-
-  /* ── Right panel ── */
-  .right-panel {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    overflow: hidden;
-  }
-
+const LIVE_STYLE = PLAYER_STYLE + `
   /* ── Camera list ── */
-  .list-panel {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    background: var(--card-background-color, #fff);
-    border-radius: 8px;
-    border: 1px solid var(--divider-color, #e0e0e0);
-  }
-  .list-msg {
-    padding: 24px;
-    text-align: center;
-    color: var(--secondary-text-color, #888);
-    font-size: 0.88em;
-  }
   .cam-item {
     display: flex;
     align-items: center;
@@ -1966,37 +1827,57 @@ const LIVE_STYLE = `
     flex-shrink: 0;
   }
   .cam-icon.live { color: var(--primary-color, #03a9f4); }
+
+  /* Live-specific button states */
+  .ctrl-btn.live {
+    background: var(--primary-color, #03a9f4);
+    border-color: var(--primary-color, #03a9f4);
+  }
+  .ctrl-btn.recording-active {
+    background: #c62828;
+    border-color: #c62828;
+  }
+
+  /* Timer display — overrides base .timer colours with live-specific names */
+  .timer-display {
+    font-size: 0.85em;
+    font-variant-numeric: tabular-nums;
+    color: rgba(255,255,255,0.45);
+    min-width: 36px;
+    white-space: nowrap;
+  }
+  .timer-display.active { color: #fff; }
+  .timer-display.urgent { color: #ef5350; }
+  .timer-display.recording { color: #ef9a9a; }
 `;
 
 const LIVE_TEMPLATE = `
   <style>${LIVE_STYLE}</style>
   <div class="container">
 
-    <div class="player-panel">
-      <div class="live-wrapper" id="liveWrapper">
-        <div id="streamContent">
-          <div class="no-selection">Select a camera to view</div>
-        </div>
-        <div class="stream-overlay" id="streamOverlay">
-          <div class="overlay-controls">
-            <button class="ctrl-btn" id="btnPlayPause" disabled>
-              <ha-icon icon="mdi:play" style="--mdc-icon-size:16px"></ha-icon>
-              Start
-            </button>
-            <span class="timer-display" id="timerLive">--:--</span>
-            <button class="ctrl-btn" id="btnRecord" disabled>
-              <ha-icon icon="mdi:record" style="--mdc-icon-size:16px"></ha-icon>
-              Record
-            </button>
-            <span class="timer-display" id="timerRec">--:--</span>
-            <div class="overlay-spacer"></div>
-            <button class="ctrl-btn icon-only" id="btnMute" disabled>
-              <ha-icon icon="mdi:volume-high" style="--mdc-icon-size:18px"></ha-icon>
-            </button>
-            <button class="ctrl-btn icon-only" id="btnFullscreen" disabled>
-              <ha-icon icon="mdi:fullscreen" style="--mdc-icon-size:18px"></ha-icon>
-            </button>
-          </div>
+    <div class="player-panel" id="playerPanel">
+      <div class="video-area" id="videoArea">
+        <div class="no-selection">Select a camera to view</div>
+      </div>
+      <div class="controls-bar" id="controlsBar">
+        <div class="controls-row">
+          <button class="ctrl-btn" id="btnPlayPause" disabled>
+            <ha-icon icon="mdi:play" style="--mdc-icon-size:16px"></ha-icon>
+            Start
+          </button>
+          <span class="timer-display" id="timerLive">--:--</span>
+          <button class="ctrl-btn" id="btnRecord" disabled>
+            <ha-icon icon="mdi:record" style="--mdc-icon-size:16px"></ha-icon>
+            Record
+          </button>
+          <span class="timer-display" id="timerRec">--:--</span>
+          <div class="ctrl-spacer"></div>
+          <button class="ctrl-btn icon-only" id="btnMute" disabled>
+            <ha-icon icon="mdi:volume-high" style="--mdc-icon-size:18px"></ha-icon>
+          </button>
+          <button class="ctrl-btn icon-only" id="btnFullscreen" disabled>
+            <ha-icon icon="mdi:fullscreen" style="--mdc-icon-size:18px"></ha-icon>
+          </button>
         </div>
       </div>
     </div>
@@ -2023,9 +1904,6 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     this._cameras = [];
     this._selectedCamera = null;
     this._isLive = false;
-    this._fakeFullscreen = false;
-    const stored = localStorage.getItem('dragontree_reolink_muted');
-    this._muted = stored === null ? true : stored === 'true';
 
     this._liveTimeoutSecs = DragontreeReolinkLiveCard._DEFAULT_LIVE_TIMEOUT;
     this._liveSecondsLeft = 0;
@@ -2037,6 +1915,9 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     this._recDisplayInterval = null;   // local setInterval for display ticking only
     this._unsubRecordTimerEvent = null;
     this._recStateOptimistic = null;   // null = use entity state, true/false = optimistic
+
+    // PlayerMixin state
+    this._initPlayer();
   }
 
   setConfig(config) {
@@ -2056,7 +1937,7 @@ class DragontreeReolinkLiveCard extends HTMLElement {
       return;
     }
     // Keep the camera stream's hass reference current (needed for auth token refresh)
-    const streamEl = this.shadowRoot.getElementById('streamContent')
+    const streamEl = this.shadowRoot.getElementById('videoArea')
       ?.querySelector('ha-camera-stream');
     if (streamEl) streamEl.hass = hass;
 
@@ -2117,12 +1998,8 @@ class DragontreeReolinkLiveCard extends HTMLElement {
       }
     });
 
-    sr.getElementById('btnFullscreen').addEventListener('click', () => this._toggleFullscreen());
-    sr.getElementById('btnMute').addEventListener('click', () => this._toggleMute());
-
-    sr.getElementById('liveWrapper').addEventListener('fullscreenchange', () => {
-      this._updateFullscreenButton();
-    });
+    // PlayerMixin shared button bindings (mute + fullscreen)
+    this._bindPlayerButtons();
 
     sr.getElementById('btnRecord').addEventListener('click', async () => {
       if (!this._selectedCamera?.record_entity_id) return;
@@ -2133,7 +2010,7 @@ class DragontreeReolinkLiveCard extends HTMLElement {
       if (isOn) this._stopRecordDisplay(); // optimistically hide timer on stop
       this._updateRecordButton();
       this._updateTimerDisplay();
-      
+
       try {
         await this._hass.callService('switch', isOn ? 'turn_off' : 'turn_on',
           { entity_id: entityId });
@@ -2143,7 +2020,6 @@ class DragontreeReolinkLiveCard extends HTMLElement {
         if (!isOn) this._stopRecordDisplay();
         this._updateRecordButton();
         this._updateTimerDisplay();
-        
       }
     });
   }
@@ -2157,13 +2033,18 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     this._selectedCamera = cam;
     this._fetchRecordTimers(); // pick up any active timer for this camera
     this._renderCameraList();
-    this._updateControlsTitle();
     this._updateRecordButton();
-    
+
     this._startLive();
   }
 
   // ── Live view ─────────────────────────────────────────────────────────────
+
+  _applyMute() {
+    const streamEl = this.shadowRoot.getElementById('videoArea')
+      ?.querySelector('ha-camera-stream');
+    if (streamEl) streamEl.muted = this._muted;
+  }
 
   _startLive() {
     if (!this._selectedCamera) return;
@@ -2171,9 +2052,9 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     if (!cameraEntityId || !this._hass.states[cameraEntityId]) {
       console.warn('[reolink-live] No camera entity for', this._selectedCamera.name,
         '— entity_id:', cameraEntityId);
-      const wrapper = this.shadowRoot.getElementById('liveWrapper');
-      if (wrapper) {
-        wrapper.innerHTML = `<div class="no-selection">Live view unavailable for this camera</div>`;
+      const videoArea = this.shadowRoot.getElementById('videoArea');
+      if (videoArea) {
+        videoArea.innerHTML = `<div class="no-selection">Live view unavailable for this camera</div>`;
       }
       return;
     }
@@ -2181,15 +2062,15 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     this._isLive = true;
     this._liveSecondsLeft = this._liveTimeoutSecs;
 
-    const content = this.shadowRoot.getElementById('streamContent');
-    if (content) {
-      content.innerHTML = '';
+    const videoArea = this.shadowRoot.getElementById('videoArea');
+    if (videoArea) {
+      videoArea.innerHTML = '';
       const streamEl = document.createElement('ha-camera-stream');
       streamEl.hass = this._hass;
       streamEl.stateObj = this._hass.states[cameraEntityId];
       streamEl.controls = false;
       streamEl.muted = this._muted;
-      content.appendChild(streamEl);
+      videoArea.appendChild(streamEl);
     }
 
     clearInterval(this._liveTimerInterval);
@@ -2211,16 +2092,16 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     clearInterval(this._liveTimerInterval);
     this._liveTimerInterval = null;
 
-    const content = this.shadowRoot.getElementById('streamContent');
-    if (content) {
+    const videoArea = this.shadowRoot.getElementById('videoArea');
+    if (videoArea) {
       if (this._selectedCamera) {
-        content.innerHTML = `
+        videoArea.innerHTML = `
           <div class="paused-overlay">
             <ha-icon icon="mdi:pause-circle-outline"></ha-icon>
             <div>Live view paused — press Start to resume</div>
           </div>`;
       } else {
-        content.innerHTML = `<div class="no-selection">Select a camera to view</div>`;
+        videoArea.innerHTML = `<div class="no-selection">Select a camera to view</div>`;
       }
     }
 
@@ -2304,7 +2185,6 @@ class DragontreeReolinkLiveCard extends HTMLElement {
 
     this._updateRecordButton();
     this._updateTimerDisplay();
-    
   }
 
   // ── UI rendering ──────────────────────────────────────────────────────────
@@ -2389,11 +2269,6 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     return parts.join('');
   }
 
-  _updateControlsTitle() {
-    const overlay = this.shadowRoot.getElementById('streamOverlay');
-    if (overlay) overlay.classList.toggle('visible', !!this._selectedCamera);
-  }
-
   _updatePlayPauseButton() {
     const btn = this.shadowRoot.getElementById('btnPlayPause');
     if (!btn) return;
@@ -2409,15 +2284,7 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     this._updateMuteButton();
   }
 
-  _toggleMute() {
-    this._muted = !this._muted;
-    localStorage.setItem('dragontree_reolink_muted', this._muted);
-    const streamEl = this.shadowRoot.getElementById('streamContent')
-      ?.querySelector('ha-camera-stream');
-    if (streamEl) streamEl.muted = this._muted;
-    this._updateMuteButton();
-  }
-
+  // Override PlayerMixin _updateMuteButton to handle disabled state
   _updateMuteButton() {
     const btn = this.shadowRoot.getElementById('btnMute');
     if (!btn) return;
@@ -2425,33 +2292,7 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     btn.innerHTML = `<ha-icon icon="${this._muted ? 'mdi:volume-off' : 'mdi:volume-high'}" style="--mdc-icon-size:18px"></ha-icon>`;
   }
 
-  _toggleFullscreen() {
-    const wrapper = this.shadowRoot.getElementById('liveWrapper');
-    if (!wrapper) return;
-    if (document.fullscreenElement || this._fakeFullscreen) {
-      // Exit fullscreen
-      if (document.fullscreenElement) document.exitFullscreen();
-      if (this._fakeFullscreen) {
-        this._fakeFullscreen = false;
-        wrapper.classList.remove('fake-fullscreen');
-        this._updateFullscreenButton();
-      }
-    } else if (wrapper.requestFullscreen) {
-      // Native fullscreen (Chrome, Firefox, Android)
-      wrapper.requestFullscreen().catch(() => {
-        // Fallback if native request fails unexpectedly
-        this._fakeFullscreen = true;
-        wrapper.classList.add('fake-fullscreen');
-        this._updateFullscreenButton();
-      });
-    } else {
-      // iOS Safari — no requestFullscreen support; use CSS overlay
-      this._fakeFullscreen = true;
-      wrapper.classList.add('fake-fullscreen');
-      this._updateFullscreenButton();
-    }
-  }
-
+  // Override PlayerMixin _updateFullscreenButton to handle disabled state
   _updateFullscreenButton() {
     const btn = this.shadowRoot.getElementById('btnFullscreen');
     if (!btn) return;
@@ -2535,5 +2376,8 @@ class DragontreeReolinkLiveCard extends HTMLElement {
       .replace(/"/g, '&quot;');
   }
 }
+
+// Mix in shared player methods (own methods defined above override the mixin)
+Object.assign(DragontreeReolinkLiveCard.prototype, PlayerMixin);
 
 customElements.define('dragontree-reolink-live', DragontreeReolinkLiveCard);
