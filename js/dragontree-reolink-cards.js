@@ -2086,11 +2086,10 @@ class DragontreeReolinkLiveCard extends HTMLElement {
   _camBadgesHtml(cam) {
     const parts = [];
     if (!cam.online) parts.push('<span class="badge-offline">Offline</span>');
-    // Manual recording: timer running means this client started/detected a manual rec
-    if (cam.name === this._selectedCamera?.name && this._recTimerInterval !== null) {
-      parts.push('<span class="badge-manrec-list">Rec</span>');
+    if (this._isManualRecording(cam)) {
+      parts.push('<span class="badge-manrec-list">Manual Rec</span>');
     } else if (this._isAutoRecording(cam.name)) {
-      parts.push('<span class="badge-rec-list">Recording</span>');
+      parts.push('<span class="badge-rec-list">Auto Rec</span>');
     }
     return parts.join('');
   }
