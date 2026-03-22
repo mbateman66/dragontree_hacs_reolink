@@ -1,9 +1,9 @@
 ##########################################################################
 # VIEW: Status & Cameras
 ##########################################################################
-- title: Status & Cameras
-  path: status
-  icon: mdi:gauge
+- title: Config
+  path: config
+  icon: mdi:tune
   cards:
     # ── Recordings Status ─────────────────────────────────────────────
     - type: entities
@@ -40,3 +40,6 @@
 
     # ── Camera Management ─────────────────────────────────────────────
     - type: custom:dragontree-reolink-cameras
+
+    # ── Timer Defaults ────────────────────────────────────────────────
+    - type: custom:dragontree-reolink-timers

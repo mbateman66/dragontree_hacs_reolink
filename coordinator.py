@@ -34,10 +34,12 @@ from .const import (
     DEFAULT_STREAM,
     DOMAIN,
     EVENT_QUEUE_CHANGED,
+    EVENT_RECORD_TIMER_CHANGED,
     EVENT_RECORDING_ADDED,
     INIT_LOOKBACK_DAYS,
     INIT_RECORDINGS_PER_CAMERA,
     LOGGER,
+    MANUAL_REC_TIMEOUT_SECS,
     MEDIA_BASE_DIR,
     MIN_RECORDING_AGE_S,
     POLL_INTERVAL,
@@ -194,6 +196,16 @@ class ReolinkDownloadCoordinator:
         self._schedule_store: Store | None = None
         self._schedule_unsubs: list = []
 
+        # Manual recording timers — keyed by camera name
+        # Each entry: {"started_at": datetime, "task": asyncio.Task, "entity_id": str}
+        self._manual_rec_timers: dict[str, dict] = {}
+        self._manual_rec_state_unsub: Any = None
+
+        # Configurable timeouts (loaded from persistent store)
+        self._timer_config_store: Store | None = None
+        self._live_timeout_secs: int = 120
+        self._record_timeout_secs: int = MANUAL_REC_TIMEOUT_SECS
+
     # ------------------------------------------------------------------ #
     # Public properties (read by sensors)                                  #
     # ------------------------------------------------------------------ #
@@ -247,6 +259,15 @@ class ReolinkDownloadCoordinator:
         self._schedule = await self._schedule_store.async_load() or {}
         self._setup_schedule_timers()
 
+        # Load configurable timer defaults
+        self._timer_config_store = Store(self.hass, 1, f"{DOMAIN}_timer_config")
+        timer_cfg = await self._timer_config_store.async_load() or {}
+        self._live_timeout_secs = timer_cfg.get("live_timeout_secs", 120)
+        self._record_timeout_secs = timer_cfg.get("record_timeout_secs", MANUAL_REC_TIMEOUT_SECS)
+
+        # Watch manual_record switches for server-side timer management
+        self._setup_manual_rec_tracking()
+
         # Generate thumbnails for recordings that don't have them yet
         self.hass.async_create_background_task(
             self._backfill_thumbnails(), name="dragontree_reolink_thumb_backfill"
@@ -263,6 +284,13 @@ class ReolinkDownloadCoordinator:
         for unsub in self._schedule_unsubs:
             unsub()
         self._schedule_unsubs.clear()
+
+        if self._manual_rec_state_unsub:
+            self._manual_rec_state_unsub()
+            self._manual_rec_state_unsub = None
+        for entry in self._manual_rec_timers.values():
+            entry["task"].cancel()
+        self._manual_rec_timers.clear()
 
         if self._worker_task:
             self._worker_task.cancel()
@@ -802,6 +830,129 @@ class ReolinkDownloadCoordinator:
             )
 
     # ------------------------------------------------------------------ #
+    # Manual recording timers                                             #
+    # ------------------------------------------------------------------ #
+
+    @callback
+    def _setup_manual_rec_tracking(self) -> None:
+        """Listen to all state changes and watch for manual_record switches."""
+        if self._manual_rec_state_unsub:
+            return
+
+        @callback
+        def _on_state_changed(event: Any) -> None:
+            entity_id: str = event.data.get("entity_id", "")
+            if not entity_id.endswith("_manual_record"):
+                return
+            old_state = event.data.get("old_state")
+            new_state = event.data.get("new_state")
+            if new_state is None:
+                return
+
+            cam_name = self._camera_name_for_entity(entity_id)
+            if not cam_name:
+                return
+
+            was_on = old_state is not None and old_state.state == "on"
+            is_on = new_state.state == "on"
+
+            if is_on and not was_on:
+                self._start_manual_rec_timer(cam_name, entity_id)
+            elif not is_on and was_on:
+                self._stop_manual_rec_timer(cam_name)
+
+        self._manual_rec_state_unsub = self.hass.bus.async_listen(
+            "state_changed", _on_state_changed
+        )
+
+    def _camera_name_for_entity(self, entity_id: str) -> str | None:
+        """Return the camera name whose slug appears in the given entity_id, or None."""
+        cam_slugs = self._collect_cam_slugs()
+        for slug, name in cam_slugs.items():
+            if slug in entity_id:
+                return name
+        return None
+
+    def _start_manual_rec_timer(self, cam_name: str, entity_id: str) -> None:
+        """Start a server-side countdown for a manual recording."""
+        self._stop_manual_rec_timer(cam_name)  # cancel any existing timer first
+
+        started_at = dt_util.utcnow()
+        timeout = self._record_timeout_secs
+        task = self.hass.async_create_background_task(
+            self._manual_rec_timeout_task(cam_name, entity_id, timeout),
+            name=f"dragontree_reolink_rec_timer_{cam_name}",
+        )
+        self._manual_rec_timers[cam_name] = {
+            "started_at": started_at,
+            "task": task,
+            "entity_id": entity_id,
+        }
+        self.hass.bus.async_fire(EVENT_RECORD_TIMER_CHANGED, {
+            "camera": cam_name,
+            "action": "started",
+            "started_at": started_at.isoformat(),
+            "timeout_secs": timeout,
+        })
+        LOGGER.info("Manual recording timer started for %s (%ds)", cam_name, timeout)
+
+    def _stop_manual_rec_timer(self, cam_name: str) -> None:
+        """Cancel any running timer for the given camera and notify the frontend."""
+        entry = self._manual_rec_timers.pop(cam_name, None)
+        if entry:
+            entry["task"].cancel()
+        self.hass.bus.async_fire(EVENT_RECORD_TIMER_CHANGED, {
+            "camera": cam_name,
+            "action": "stopped",
+        })
+
+    async def _manual_rec_timeout_task(
+        self, cam_name: str, entity_id: str, timeout_secs: int
+    ) -> None:
+        """Wait timeout_secs then turn off the manual record switch."""
+        try:
+            await asyncio.sleep(timeout_secs)
+            LOGGER.info("Manual recording timed out for %s — stopping", cam_name)
+            await self.hass.services.async_call(
+                "switch", "turn_off", {"entity_id": entity_id}, blocking=False
+            )
+            # State change will trigger _stop_manual_rec_timer via the listener
+        except asyncio.CancelledError:
+            pass  # Stopped manually or integration unloaded
+
+    def get_record_timers(self) -> dict[str, dict]:
+        """Return current timer state for all cameras with active manual recordings."""
+        now = dt_util.utcnow()
+        result = {}
+        for cam_name, entry in self._manual_rec_timers.items():
+            elapsed = (now - entry["started_at"]).total_seconds()
+            timeout = self._record_timeout_secs
+            result[cam_name] = {
+                "started_at": entry["started_at"].isoformat(),
+                "timeout_secs": timeout,
+                "seconds_remaining": max(0, timeout - elapsed),
+            }
+        return result
+
+    def async_get_timer_config(self) -> dict:
+        """Return the current live and recording timeout settings."""
+        return {
+            "live_timeout_secs": self._live_timeout_secs,
+            "record_timeout_secs": self._record_timeout_secs,
+        }
+
+    async def async_set_timer_config(
+        self, live_timeout_secs: int, record_timeout_secs: int
+    ) -> None:
+        """Persist new timeout settings."""
+        self._live_timeout_secs = live_timeout_secs
+        self._record_timeout_secs = record_timeout_secs
+        await self._timer_config_store.async_save({
+            "live_timeout_secs": live_timeout_secs,
+            "record_timeout_secs": record_timeout_secs,
+        })
+
+    # ------------------------------------------------------------------ #
     # Camera schedule                                                      #
     # ------------------------------------------------------------------ #
 
@@ -842,6 +993,29 @@ class ReolinkDownloadCoordinator:
                     cam_slugs[slug] = device.name
 
         return cam_slugs
+
+    def _find_camera_entities(self) -> dict[str, str]:
+        """Return {camera_name: camera_entity_id} for Reolink camera entities.
+
+        Prefers the main stream entity over the sub stream (_sub suffix).
+        """
+        cam_slugs = self._collect_cam_slugs()
+
+        if not cam_slugs:
+            return {}
+
+        all_camera_ids = self.hass.states.async_entity_ids("camera")
+        result: dict[str, str] = {}
+
+        for cam_slug, cam_name in cam_slugs.items():
+            matches = [eid for eid in all_camera_ids if cam_slug in eid]
+            if not matches:
+                continue
+            # Prefer main stream (non-_sub)
+            main = [m for m in matches if not m.endswith("_sub")]
+            result[cam_name] = main[0] if main else matches[0]
+
+        return result
 
     def _find_cam_entities_by_suffix(self, suffix: str, domain: str) -> dict[str, str]:
         """Return {camera_name: entity_id} for Reolink entities matching suffix in domain."""
@@ -942,6 +1116,8 @@ class ReolinkDownloadCoordinator:
         pir_entities = self._find_pir_entities()
         rfa_entities = self._find_cam_entities_by_suffix("_pir_reduce_false_alarm", "switch")
         sens_entities = self._find_cam_entities_by_suffix("_pir_sensitivity", "number")
+        record_entities = self._find_cam_entities_by_suffix("_manual_record", "switch")
+        camera_entities = self._find_camera_entities()
         cameras_cfg = self._schedule.get("cameras", {})
         result = []
         for cam_name, pir_entity_id in pir_entities.items():
@@ -974,6 +1150,8 @@ class ReolinkDownloadCoordinator:
                 "pir_entity_id": pir_entity_id,
                 "rfa_entity_id": rfa_entity_id,
                 "sensitivity_entity_id": sens_entity_id,
+                "record_entity_id": record_entities.get(cam_name),
+                "camera_entity_id": camera_entities.get(cam_name),
                 "in_schedule": in_schedule,
                 "enabled": _bool_state(state),
                 "rfa_enabled": _bool_state(rfa_state),

@@ -1,0 +1,11 @@
+##########################################################################
+# VIEW: Live Camera View
+##########################################################################
+- title: Live View
+  path: live
+  icon: mdi:video
+  panel: true
+  cards:
+    - type: custom:dragontree-reolink-live
+      live_timeout_seconds: 120   # auto-stop live view after this many seconds
+      # recording timeout is configured server-side (MANUAL_REC_TIMEOUT_SECS in const.py)

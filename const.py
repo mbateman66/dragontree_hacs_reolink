@@ -46,3 +46,11 @@ EVENT_RECORDING_ADDED = f"{DOMAIN}_recording_added"
 # HA event bus event fired when the pending queue changes (item queued or status
 # changes to downloading).  Subscribed to by the Lovelace card to show pending rows.
 EVENT_QUEUE_CHANGED = f"{DOMAIN}_queue_changed"
+
+# HA event bus event fired when a manual recording timer starts or stops.
+# Payload: {"camera": str, "action": "started"|"stopped",
+#           "started_at": isoformat str, "timeout_secs": int}  (started only)
+EVENT_RECORD_TIMER_CHANGED = f"{DOMAIN}_record_timer_changed"
+
+# Server-side timeout for manual recordings (seconds).
+MANUAL_REC_TIMEOUT_SECS = 120

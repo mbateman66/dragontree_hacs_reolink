@@ -5,6 +5,7 @@
  *   dragontree-reolink-playback  — 3-panel recording playback UI
  *   dragontree-reolink-schedule  — camera schedule on/off times
  *   dragontree-reolink-cameras   — per-camera enable + schedule toggles
+ *   dragontree-reolink-timers    — configurable live-view and recording timeouts
  */
 
 // ---------------------------------------------------------------------------
@@ -1413,3 +1414,965 @@ class DragontreeReolinkCamerasCard extends HTMLElement {
 }
 
 customElements.define('dragontree-reolink-cameras', DragontreeReolinkCamerasCard);
+
+// ---------------------------------------------------------------------------
+// dragontree-reolink-timers
+// ---------------------------------------------------------------------------
+
+const TIMERS_STYLE = `
+  :host { display: block; }
+  .row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    min-height: 52px;
+    border-bottom: 1px solid var(--divider-color, #e0e0e0);
+  }
+  .row:last-of-type { border-bottom: none; }
+  .row-label { font-size: 1rem; color: var(--primary-text-color); }
+  .input-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+  input[type="text"] {
+    border: 1px solid var(--input-idle-line-color, var(--divider-color, #e0e0e0));
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 0.875rem;
+    background: transparent;
+    color: var(--primary-text-color);
+    width: 72px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+  input.error { border-color: var(--error-color, #db4437); }
+  .field-error {
+    font-size: 0.7rem;
+    color: var(--error-color, #db4437);
+    min-height: 1em;
+  }
+  .status-text {
+    padding: 4px 16px 16px;
+    font-size: 0.75rem;
+    color: var(--secondary-text-color, #888);
+    border-top: 1px solid var(--divider-color, #e0e0e0);
+  }
+`;
+
+const TIMERS_TEMPLATE = `
+  <style>${TIMERS_STYLE}</style>
+  <ha-card header="Default Timers">
+    <div class="row">
+      <span class="row-label">Live View Timeout</span>
+      <div class="input-wrap">
+        <input type="text" id="liveTimeout" placeholder="M:SS" maxlength="5">
+        <span class="field-error" id="liveErr"></span>
+      </div>
+    </div>
+    <div class="row">
+      <span class="row-label">Recording Timeout</span>
+      <div class="input-wrap">
+        <input type="text" id="recTimeout" placeholder="M:SS" maxlength="5">
+        <span class="field-error" id="recErr"></span>
+      </div>
+    </div>
+    <div class="status-text" id="statusText">Range: 0:15 – 10:00</div>
+  </ha-card>
+`;
+
+class DragontreeReolinkTimersCard extends HTMLElement {
+  static _MIN_SECS = 15;
+  static _MAX_SECS = 600;
+
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._hass = null;
+    this._initialized = false;
+    this._saving = false;
+  }
+
+  setConfig(config) { this._config = config; }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (!this._initialized) {
+      this._initialized = true;
+      this._build();
+    }
+  }
+
+  _build() {
+    this.shadowRoot.innerHTML = TIMERS_TEMPLATE;
+    this._loadConfig().then(() => this._bindEvents());
+  }
+
+  async _loadConfig() {
+    try {
+      const result = await this._hass.callWS({ type: 'dragontree_reolink/get_timer_config' });
+      this.shadowRoot.getElementById('liveTimeout').value =
+        this._secsToMmss(result.live_timeout_secs);
+      this.shadowRoot.getElementById('recTimeout').value =
+        this._secsToMmss(result.record_timeout_secs);
+    } catch (e) {
+      console.error('[reolink] Failed to load timer config:', e);
+    }
+  }
+
+  _bindEvents() {
+    const sr = this.shadowRoot;
+    const onLiveChange = () => this._onFieldChange('liveTimeout', 'liveErr');
+    const onRecChange  = () => this._onFieldChange('recTimeout', 'recErr');
+
+    sr.getElementById('liveTimeout').addEventListener('change', onLiveChange);
+    sr.getElementById('liveTimeout').addEventListener('blur', onLiveChange);
+    sr.getElementById('recTimeout').addEventListener('change', onRecChange);
+    sr.getElementById('recTimeout').addEventListener('blur', onRecChange);
+  }
+
+  _onFieldChange(inputId, errId) {
+    const sr = this.shadowRoot;
+    const input = sr.getElementById(inputId);
+    const errEl = sr.getElementById(errId);
+    const secs = this._mmssToSecs(input.value);
+
+    if (secs === null) {
+      input.classList.add('error');
+      errEl.textContent = 'Use M:SS format';
+      return;
+    }
+    if (secs < DragontreeReolinkTimersCard._MIN_SECS ||
+        secs > DragontreeReolinkTimersCard._MAX_SECS) {
+      input.classList.add('error');
+      errEl.textContent = '0:15 – 10:00';
+      return;
+    }
+
+    input.classList.remove('error');
+    errEl.textContent = '';
+    input.value = this._secsToMmss(secs); // normalize display
+    this._save();
+  }
+
+  async _save() {
+    if (this._saving) return;
+    const sr = this.shadowRoot;
+
+    const liveSecs = this._mmssToSecs(sr.getElementById('liveTimeout').value);
+    const recSecs  = this._mmssToSecs(sr.getElementById('recTimeout').value);
+    if (liveSecs === null || recSecs === null) return;
+    if (liveSecs < DragontreeReolinkTimersCard._MIN_SECS ||
+        liveSecs > DragontreeReolinkTimersCard._MAX_SECS ||
+        recSecs < DragontreeReolinkTimersCard._MIN_SECS ||
+        recSecs > DragontreeReolinkTimersCard._MAX_SECS) return;
+
+    this._saving = true;
+    try {
+      await this._hass.callWS({
+        type: 'dragontree_reolink/set_timer_config',
+        live_timeout_secs: liveSecs,
+        record_timeout_secs: recSecs,
+      });
+      const statusEl = sr.getElementById('statusText');
+      if (statusEl) {
+        statusEl.textContent = 'Saved.';
+        setTimeout(() => { statusEl.textContent = 'Range: 0:15 – 10:00'; }, 2000);
+      }
+    } catch (e) {
+      console.error('[reolink] Failed to save timer config:', e);
+    } finally {
+      this._saving = false;
+    }
+  }
+
+  _secsToMmss(secs) {
+    const s = Math.max(0, Math.round(secs));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  }
+
+  _mmssToSecs(str) {
+    const m = String(str).trim().match(/^(\d{1,2}):([0-5]\d)$/);
+    if (!m) return null;
+    return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+  }
+}
+
+customElements.define('dragontree-reolink-timers', DragontreeReolinkTimersCard);
+
+// ---------------------------------------------------------------------------
+// dragontree-reolink-live
+// ---------------------------------------------------------------------------
+
+const LIVE_STYLE = `
+  :host { display: block; }
+
+  .container {
+    display: grid;
+    grid-template-columns: 1fr 380px;
+    gap: 12px;
+    height: 70vh;
+    min-height: 420px;
+  }
+  @media (max-width: 800px) {
+    .container {
+      grid-template-columns: 1fr;
+      grid-template-rows: auto 1fr;
+      height: calc(100dvh - 56px);
+      min-height: 400px;
+    }
+    .live-wrapper {
+      aspect-ratio: 16 / 9;
+      flex: none;
+    }
+  }
+
+  /* ── Player panel ── */
+  .player-panel {
+    display: flex;
+    flex-direction: column;
+    background: #000;
+    border-radius: 8px;
+    overflow: hidden;
+    min-height: 0;
+  }
+  .live-wrapper {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+  }
+  #liveWrapper:fullscreen {
+    background: #000;
+    width: 100vw;
+    height: 100vh;
+  }
+
+  /* ── Stream content (video / placeholder) ── */
+  #streamContent {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #streamContent ha-camera-stream {
+    width: 100%;
+    height: 100%;
+  }
+  .no-selection, .paused-overlay {
+    color: #888;
+    font-size: 0.9em;
+    text-align: center;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+  .paused-overlay ha-icon {
+    --mdc-icon-size: 48px;
+    color: #555;
+  }
+
+  /* ── Stream overlay controls ── */
+  .stream-overlay {
+    display: none;
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(transparent, rgba(0, 0, 0, 0.72));
+    padding: 28px 12px 10px;
+    z-index: 5;
+  }
+  .stream-overlay.visible { display: block; }
+  .overlay-title {
+    font-size: 0.78em;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.7);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 6px;
+  }
+  .overlay-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .overlay-spacer { flex: 1; }
+  .ctrl-btn {
+    background: rgba(255, 255, 255, 0.15);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    color: #fff;
+    padding: 5px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.82em;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    transition: background 0.15s;
+    white-space: nowrap;
+  }
+  .ctrl-btn:hover:not([disabled]) { background: rgba(255, 255, 255, 0.28); }
+  .ctrl-btn[disabled] { opacity: 0.35; cursor: default; }
+  .ctrl-btn.icon-only { padding: 5px; }
+  .ctrl-btn.live {
+    background: var(--primary-color, #03a9f4);
+    border-color: var(--primary-color, #03a9f4);
+  }
+  .ctrl-btn.recording-active {
+    background: #c62828;
+    border-color: #c62828;
+  }
+  .timer-display {
+    font-size: 0.88em;
+    font-variant-numeric: tabular-nums;
+    color: rgba(255, 255, 255, 0.55);
+    font-weight: 500;
+    min-width: 36px;
+    white-space: nowrap;
+  }
+  .timer-display.active { color: #fff; }
+  .timer-display.urgent { color: #ef5350; }
+  .timer-display.recording { color: #ef9a9a; }
+
+  /* ── Right panel ── */
+  .right-panel {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* ── Camera list ── */
+  .list-panel {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    background: var(--card-background-color, #fff);
+    border-radius: 8px;
+    border: 1px solid var(--divider-color, #e0e0e0);
+  }
+  .list-msg {
+    padding: 24px;
+    text-align: center;
+    color: var(--secondary-text-color, #888);
+    font-size: 0.88em;
+  }
+  .cam-item {
+    display: flex;
+    align-items: center;
+    padding: 10px 14px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--divider-color, #e0e0e0);
+    gap: 10px;
+    transition: background 0.1s;
+  }
+  .cam-item:last-child { border-bottom: none; }
+  .cam-item:hover { background: var(--secondary-background-color, #f5f5f5); }
+  .cam-item.selected { background: var(--primary-color-light, #e3f2fd); }
+  .cam-item.offline { opacity: 0.5; }
+  .cam-info { flex: 1; min-width: 0; }
+  .cam-name {
+    font-size: 0.92em;
+    font-weight: 500;
+    color: var(--primary-text-color, #212121);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .cam-badges { display: flex; gap: 4px; margin-top: 3px; }
+  .badge-offline {
+    font-size: 0.65em;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--error-color, #db4437);
+    border: 1px solid var(--error-color, #db4437);
+    border-radius: 3px;
+    padding: 1px 4px;
+    text-transform: uppercase;
+  }
+  .badge-rec-list {
+    font-size: 0.65em;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: #fce4ec;
+    color: #b71c1c;
+    text-transform: uppercase;
+  }
+  .badge-manrec-list {
+    font-size: 0.65em;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: #c62828;
+    color: #fff;
+    text-transform: uppercase;
+  }
+  .cam-icon {
+    --mdc-icon-size: 20px;
+    color: var(--secondary-text-color, #888);
+    flex-shrink: 0;
+  }
+  .cam-icon.live { color: var(--primary-color, #03a9f4); }
+`;
+
+const LIVE_TEMPLATE = `
+  <style>${LIVE_STYLE}</style>
+  <div class="container">
+
+    <div class="player-panel">
+      <div class="live-wrapper" id="liveWrapper">
+        <div id="streamContent">
+          <div class="no-selection">Select a camera to view</div>
+        </div>
+        <div class="stream-overlay" id="streamOverlay">
+          <div class="overlay-title" id="overlayTitle"></div>
+          <div class="overlay-controls">
+            <button class="ctrl-btn" id="btnPlayPause" disabled>
+              <ha-icon icon="mdi:play" style="--mdc-icon-size:16px"></ha-icon>
+              Start
+            </button>
+            <span class="timer-display" id="timerLive">--:--</span>
+            <button class="ctrl-btn" id="btnRecord" disabled>
+              <ha-icon icon="mdi:record" style="--mdc-icon-size:16px"></ha-icon>
+              Record
+            </button>
+            <span class="timer-display" id="timerRec">--:--</span>
+            <div class="overlay-spacer"></div>
+            <button class="ctrl-btn icon-only" id="btnMute" disabled>
+              <ha-icon icon="mdi:volume-high" style="--mdc-icon-size:18px"></ha-icon>
+            </button>
+            <button class="ctrl-btn icon-only" id="btnFullscreen" disabled>
+              <ha-icon icon="mdi:fullscreen" style="--mdc-icon-size:18px"></ha-icon>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="right-panel">
+      <div class="list-panel" id="listPanel">
+        <div class="list-msg">Loading…</div>
+      </div>
+    </div>
+
+  </div>
+`;
+
+class DragontreeReolinkLiveCard extends HTMLElement {
+  static _DEFAULT_LIVE_TIMEOUT = 120; // seconds
+
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._hass = null;
+    this._config = {};
+    this._initialized = false;
+
+    this._cameras = [];
+    this._selectedCamera = null;
+    this._isLive = false;
+    const stored = localStorage.getItem('dragontree_reolink_muted');
+    this._muted = stored === null ? true : stored === 'true';
+
+    this._liveTimeoutSecs = DragontreeReolinkLiveCard._DEFAULT_LIVE_TIMEOUT;
+    this._liveSecondsLeft = 0;
+    this._liveTimerInterval = null;
+
+    // Recording display — driven by server-side timer events
+    this._recStartedAt = null;         // Date from server when recording started
+    this._recServerTimeoutSecs = 0;    // timeout_secs from server
+    this._recDisplayInterval = null;   // local setInterval for display ticking only
+    this._unsubRecordTimerEvent = null;
+    this._recStateOptimistic = null;   // null = use entity state, true/false = optimistic
+  }
+
+  setConfig(config) {
+    this._config = config || {};
+    if (config && config.live_timeout_seconds) {
+      this._liveTimeoutSecs = parseInt(config.live_timeout_seconds, 10) ||
+        DragontreeReolinkLiveCard._DEFAULT_LIVE_TIMEOUT;
+    }
+  }
+
+  set hass(hass) {
+    const prev = this._hass;
+    this._hass = hass;
+    if (!this._initialized) {
+      this._initialized = true;
+      this._build();
+      return;
+    }
+    // Keep the camera stream's hass reference current (needed for auth token refresh)
+    const streamEl = this.shadowRoot.getElementById('streamContent')
+      ?.querySelector('ha-camera-stream');
+    if (streamEl) streamEl.hass = hass;
+
+    this._syncRecordingState(prev);
+    this._updateCameraListBadges();
+  }
+
+  disconnectedCallback() {
+    this._stopLive();
+    this._stopRecordDisplay();
+    if (this._unsubRecordTimerEvent) {
+      this._unsubRecordTimerEvent();
+      this._unsubRecordTimerEvent = null;
+    }
+  }
+
+  // ── Initialisation ────────────────────────────────────────────────────────
+
+  _build() {
+    this.shadowRoot.innerHTML = LIVE_TEMPLATE;
+    this._bindStaticEvents();
+    Promise.all([this._loadCameras(), this._loadTimerConfig()]).then(() => {
+      this._renderCameraList();
+      this._subscribeRecordTimerEvent();
+    });
+  }
+
+  async _loadTimerConfig() {
+    try {
+      const result = await this._hass.callWS({ type: 'dragontree_reolink/get_timer_config' });
+      if (result.live_timeout_secs) this._liveTimeoutSecs = result.live_timeout_secs;
+    } catch (e) {
+      // falls back to card config value / default
+    }
+  }
+
+  async _loadCameras() {
+    try {
+      const result = await this._hass.callWS({ type: 'dragontree_reolink/get_cameras_config' });
+      this._cameras = result.cameras || [];
+    } catch (e) {
+      console.error('[reolink-live] Failed to load cameras:', e);
+      const list = this.shadowRoot.getElementById('listPanel');
+      if (list) list.innerHTML = '<div class="list-msg">Failed to load cameras</div>';
+    }
+  }
+
+  // ── Event binding ─────────────────────────────────────────────────────────
+
+  _bindStaticEvents() {
+    const sr = this.shadowRoot;
+
+    sr.getElementById('btnPlayPause').addEventListener('click', () => {
+      if (this._isLive) {
+        this._stopLive();
+      } else if (this._selectedCamera) {
+        this._startLive();
+      }
+    });
+
+    sr.getElementById('btnFullscreen').addEventListener('click', () => this._toggleFullscreen());
+    sr.getElementById('btnMute').addEventListener('click', () => this._toggleMute());
+
+    sr.getElementById('liveWrapper').addEventListener('fullscreenchange', () => {
+      this._updateFullscreenButton();
+    });
+
+    sr.getElementById('btnRecord').addEventListener('click', async () => {
+      if (!this._selectedCamera?.record_entity_id) return;
+      const entityId = this._selectedCamera.record_entity_id;
+      const isOn = this._hass.states[entityId]?.state === 'on';
+      // Optimistic UI update — button responds immediately
+      this._recStateOptimistic = !isOn;
+      if (isOn) this._stopRecordDisplay(); // optimistically hide timer on stop
+      this._updateRecordButton();
+      this._updateTimerDisplay();
+      
+      try {
+        await this._hass.callService('switch', isOn ? 'turn_off' : 'turn_on',
+          { entity_id: entityId });
+      } catch (e) {
+        console.error('[reolink-live] Failed to toggle recording:', e);
+        this._recStateOptimistic = null;
+        if (!isOn) this._stopRecordDisplay();
+        this._updateRecordButton();
+        this._updateTimerDisplay();
+        
+      }
+    });
+  }
+
+  // ── Camera selection ──────────────────────────────────────────────────────
+
+  _selectCamera(cam) {
+    if (this._selectedCamera?.name === cam.name) return;
+    this._stopLive();
+    this._stopRecordDisplay();
+    this._selectedCamera = cam;
+    this._fetchRecordTimers(); // pick up any active timer for this camera
+    this._renderCameraList();
+    this._updateControlsTitle();
+    this._updateRecordButton();
+    
+    this._startLive();
+  }
+
+  // ── Live view ─────────────────────────────────────────────────────────────
+
+  _startLive() {
+    if (!this._selectedCamera) return;
+    const cameraEntityId = this._selectedCamera.camera_entity_id;
+    if (!cameraEntityId || !this._hass.states[cameraEntityId]) {
+      console.warn('[reolink-live] No camera entity for', this._selectedCamera.name,
+        '— entity_id:', cameraEntityId);
+      const wrapper = this.shadowRoot.getElementById('liveWrapper');
+      if (wrapper) {
+        wrapper.innerHTML = `<div class="no-selection">Live view unavailable for this camera</div>`;
+      }
+      return;
+    }
+
+    this._isLive = true;
+    this._liveSecondsLeft = this._liveTimeoutSecs;
+
+    const content = this.shadowRoot.getElementById('streamContent');
+    if (content) {
+      content.innerHTML = '';
+      const streamEl = document.createElement('ha-camera-stream');
+      streamEl.hass = this._hass;
+      streamEl.stateObj = this._hass.states[cameraEntityId];
+      streamEl.controls = false;
+      streamEl.muted = this._muted;
+      content.appendChild(streamEl);
+    }
+
+    clearInterval(this._liveTimerInterval);
+    this._liveTimerInterval = setInterval(() => {
+      this._liveSecondsLeft--;
+      this._updateTimerDisplay();
+      if (this._liveSecondsLeft <= 0) {
+        this._stopLive();
+      }
+    }, 1000);
+
+    this._updatePlayPauseButton();
+    this._updateTimerDisplay();
+    this._updateCameraListBadges();
+  }
+
+  _stopLive() {
+    this._isLive = false;
+    clearInterval(this._liveTimerInterval);
+    this._liveTimerInterval = null;
+
+    const content = this.shadowRoot.getElementById('streamContent');
+    if (content) {
+      if (this._selectedCamera) {
+        content.innerHTML = `
+          <div class="paused-overlay">
+            <ha-icon icon="mdi:pause-circle-outline"></ha-icon>
+            <div>Live view paused — press Start to resume</div>
+          </div>`;
+      } else {
+        content.innerHTML = `<div class="no-selection">Select a camera to view</div>`;
+      }
+    }
+
+    this._updatePlayPauseButton();
+    this._updateTimerDisplay();
+    this._updateCameraListBadges();
+  }
+
+  // ── Record timer event subscription & display ────────────────────────────
+
+  _subscribeRecordTimerEvent() {
+    if (this._unsubRecordTimerEvent) return;
+    this._hass.connection.subscribeEvents(
+      (event) => this._onRecordTimerEvent(event.data),
+      'dragontree_reolink_record_timer_changed'
+    ).then(unsub => {
+      this._unsubRecordTimerEvent = unsub;
+    }).catch(err => console.warn('[reolink-live] Record timer subscription failed:', err));
+  }
+
+  _onRecordTimerEvent(data) {
+    if (data.camera !== this._selectedCamera?.name) return;
+    if (data.action === 'started') {
+      this._startRecordDisplay(new Date(data.started_at), data.timeout_secs);
+    } else {
+      this._stopRecordDisplay();
+    }
+    this._updateTimerDisplay();
+  }
+
+  async _fetchRecordTimers() {
+    if (!this._selectedCamera) return;
+    try {
+      const result = await this._hass.callWS({ type: 'dragontree_reolink/get_record_timers' });
+      const timer = result.timers?.[this._selectedCamera.name];
+      if (timer) {
+        this._startRecordDisplay(new Date(timer.started_at), timer.timeout_secs);
+      } else {
+        this._stopRecordDisplay();
+      }
+      this._updateTimerDisplay();
+    } catch (e) {
+      console.error('[reolink-live] Failed to fetch record timers:', e);
+    }
+  }
+
+  _startRecordDisplay(startedAt, timeoutSecs) {
+    this._stopRecordDisplay();
+    this._recStartedAt = startedAt;
+    this._recServerTimeoutSecs = timeoutSecs;
+    this._recDisplayInterval = setInterval(() => this._updateTimerDisplay(), 1000);
+    this._updateTimerDisplay();
+  }
+
+  _stopRecordDisplay() {
+    clearInterval(this._recDisplayInterval);
+    this._recDisplayInterval = null;
+    this._recStartedAt = null;
+    this._recServerTimeoutSecs = 0;
+  }
+
+  // ── State sync (called on every hass update) ──────────────────────────────
+
+  _syncRecordingState(prev) {
+    if (!this._selectedCamera?.record_entity_id) return;
+    const entityId = this._selectedCamera.record_entity_id;
+    const prevState = prev?.states[entityId];
+    const currState = this._hass.states[entityId];
+    if (!currState) return;
+
+    const isOn = currState.state === 'on';
+    const wasOn = prevState?.state === 'on';
+
+    // Real state has arrived — clear optimistic override
+    this._recStateOptimistic = null;
+
+    // When recording stops, clear the display (server fires event too, belt-and-suspenders)
+    if (!isOn && wasOn) {
+      this._stopRecordDisplay();
+    }
+
+    this._updateRecordButton();
+    this._updateTimerDisplay();
+    
+  }
+
+  // ── UI rendering ──────────────────────────────────────────────────────────
+
+  _renderCameraList() {
+    const listPanel = this.shadowRoot.getElementById('listPanel');
+    if (!listPanel) return;
+
+    if (!this._cameras.length) {
+      listPanel.innerHTML = '<div class="list-msg">No cameras found</div>';
+      return;
+    }
+
+    listPanel.innerHTML = this._cameras.map((cam, i) => {
+      const isSelected = this._selectedCamera?.name === cam.name;
+      const isLiveThis = isSelected && this._isLive;
+      const badges = this._camBadgesHtml(cam);
+
+      return `
+        <div class="cam-item${isSelected ? ' selected' : ''}${!cam.online ? ' offline' : ''}"
+             data-index="${i}">
+          <ha-icon class="cam-icon${isLiveThis ? ' live' : ''}"
+                   icon="${isLiveThis ? 'mdi:video' : 'mdi:camera'}"></ha-icon>
+          <div class="cam-info">
+            <div class="cam-name">${this._escHtml(cam.name)}</div>
+            ${badges ? `<div class="cam-badges">${badges}</div>` : ''}
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    listPanel.querySelectorAll('.cam-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const cam = this._cameras[parseInt(item.dataset.index, 10)];
+        if (cam) this._selectCamera(cam);
+      });
+    });
+  }
+
+  /** Lightweight badge/icon refresh without full list re-render. */
+  _updateCameraListBadges() {
+    const listPanel = this.shadowRoot.getElementById('listPanel');
+    if (!listPanel) return;
+
+    listPanel.querySelectorAll('.cam-item[data-index]').forEach(item => {
+      const cam = this._cameras[parseInt(item.dataset.index, 10)];
+      if (!cam) return;
+
+      const isSelected = this._selectedCamera?.name === cam.name;
+      const isLiveThis = isSelected && this._isLive;
+
+      item.classList.toggle('selected', isSelected);
+      item.classList.toggle('offline', !cam.online);
+
+      const icon = item.querySelector('.cam-icon');
+      if (icon) {
+        icon.setAttribute('icon', isLiveThis ? 'mdi:video' : 'mdi:camera');
+        icon.classList.toggle('live', isLiveThis);
+      }
+
+      const badgesHtml = this._camBadgesHtml(cam);
+      const badgesEl = item.querySelector('.cam-badges');
+      if (badgesHtml) {
+        if (badgesEl) {
+          badgesEl.innerHTML = badgesHtml;
+        } else {
+          item.querySelector('.cam-info')
+            ?.insertAdjacentHTML('beforeend', `<div class="cam-badges">${badgesHtml}</div>`);
+        }
+      } else if (badgesEl) {
+        badgesEl.remove();
+      }
+    });
+  }
+
+  _camBadgesHtml(cam) {
+    const parts = [];
+    if (!cam.online) parts.push('<span class="badge-offline">Offline</span>');
+    if (this._isManualRecording(cam)) {
+      parts.push('<span class="badge-manrec-list">Manual Rec</span>');
+    }
+    return parts.join('');
+  }
+
+  _updateControlsTitle() {
+    const title = this.shadowRoot.getElementById('overlayTitle');
+    if (title) title.textContent = this._selectedCamera?.name ?? '';
+    const overlay = this.shadowRoot.getElementById('streamOverlay');
+    if (overlay) overlay.classList.toggle('visible', !!this._selectedCamera);
+  }
+
+  _updatePlayPauseButton() {
+    const btn = this.shadowRoot.getElementById('btnPlayPause');
+    if (!btn) return;
+    btn.disabled = !this._selectedCamera;
+    if (this._isLive) {
+      btn.innerHTML = '<ha-icon icon="mdi:pause" style="--mdc-icon-size:16px"></ha-icon> Pause';
+      btn.classList.add('live');
+    } else {
+      btn.innerHTML = '<ha-icon icon="mdi:play" style="--mdc-icon-size:16px"></ha-icon> Start';
+      btn.classList.remove('live');
+    }
+    this._updateFullscreenButton();
+    this._updateMuteButton();
+  }
+
+  _toggleMute() {
+    this._muted = !this._muted;
+    localStorage.setItem('dragontree_reolink_muted', this._muted);
+    const streamEl = this.shadowRoot.getElementById('streamContent')
+      ?.querySelector('ha-camera-stream');
+    if (streamEl) streamEl.muted = this._muted;
+    this._updateMuteButton();
+  }
+
+  _updateMuteButton() {
+    const btn = this.shadowRoot.getElementById('btnMute');
+    if (!btn) return;
+    btn.disabled = !this._isLive;
+    btn.innerHTML = `<ha-icon icon="${this._muted ? 'mdi:volume-off' : 'mdi:volume-high'}" style="--mdc-icon-size:18px"></ha-icon>`;
+  }
+
+  _toggleFullscreen() {
+    const wrapper = this.shadowRoot.getElementById('liveWrapper');
+    if (!wrapper) return;
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      wrapper.requestFullscreen();
+    }
+  }
+
+  _updateFullscreenButton() {
+    const btn = this.shadowRoot.getElementById('btnFullscreen');
+    if (!btn) return;
+    btn.disabled = !this._isLive;
+    if (document.fullscreenElement) {
+      btn.innerHTML = '<ha-icon icon="mdi:fullscreen-exit" style="--mdc-icon-size:16px"></ha-icon> Exit';
+    } else {
+      btn.innerHTML = '<ha-icon icon="mdi:fullscreen" style="--mdc-icon-size:16px"></ha-icon> Fullscreen';
+    }
+  }
+
+  _updateRecordButton() {
+    const btn = this.shadowRoot.getElementById('btnRecord');
+    if (!btn) return;
+
+    if (!this._selectedCamera) {
+      btn.disabled = true;
+      btn.classList.remove('recording-active');
+      btn.innerHTML = '<ha-icon icon="mdi:record" style="--mdc-icon-size:16px"></ha-icon> Record';
+      return;
+    }
+
+    const isManualRec = this._isManualRecording(this._selectedCamera);
+
+    if (isManualRec) {
+      btn.disabled = false;
+      btn.classList.add('recording-active');
+      btn.innerHTML = '<ha-icon icon="mdi:stop" style="--mdc-icon-size:16px"></ha-icon> Stop Rec';
+    } else {
+      btn.disabled = !this._selectedCamera.record_entity_id;
+      btn.classList.remove('recording-active');
+      btn.innerHTML = '<ha-icon icon="mdi:record" style="--mdc-icon-size:16px"></ha-icon> Record';
+    }
+  }
+
+  _updateTimerDisplay() {
+    const liveEl = this.shadowRoot.getElementById('timerLive');
+    const recEl  = this.shadowRoot.getElementById('timerRec');
+
+    if (liveEl) {
+      if (this._isLive) {
+        liveEl.textContent = this._formatSecs(this._liveSecondsLeft);
+        liveEl.className = 'timer-display active' +
+          (this._liveSecondsLeft <= 30 ? ' urgent' : '');
+      } else {
+        liveEl.textContent = '--:--';
+        liveEl.className = 'timer-display';
+      }
+    }
+
+    if (recEl) {
+      if (this._recStartedAt) {
+        const elapsed = (Date.now() - this._recStartedAt.getTime()) / 1000;
+        const remaining = Math.max(0, this._recServerTimeoutSecs - elapsed);
+        recEl.textContent = this._formatSecs(remaining);
+        recEl.className = 'timer-display recording' + (remaining <= 30 ? ' urgent' : '');
+      } else {
+        recEl.textContent = '--:--';
+        recEl.className = 'timer-display';
+      }
+    }
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  _isManualRecording(cam) {
+    if (!cam?.record_entity_id) return false;
+    if (cam.name === this._selectedCamera?.name && this._recStateOptimistic !== null) {
+      return this._recStateOptimistic;
+    }
+    return this._hass?.states[cam.record_entity_id]?.state === 'on';
+  }
+
+  _formatSecs(totalSeconds) {
+    const s = Math.max(0, Math.round(totalSeconds));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  }
+
+  _escHtml(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+}
+
+customElements.define('dragontree-reolink-live', DragontreeReolinkLiveCard);
