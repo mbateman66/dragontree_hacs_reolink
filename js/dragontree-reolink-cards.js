@@ -1544,14 +1544,14 @@ const LIVE_STYLE = `
     color: #fff;
   }
   .timer-display {
-    margin-left: auto;
-    font-size: 0.95em;
+    font-size: 0.88em;
     font-variant-numeric: tabular-nums;
-    color: var(--primary-text-color, #212121);
+    color: var(--secondary-text-color, #888);
     font-weight: 500;
-    min-width: 52px;
-    text-align: right;
+    min-width: 36px;
+    white-space: nowrap;
   }
+  .timer-display.active { color: var(--primary-text-color, #212121); }
   .timer-display.urgent { color: var(--error-color, #db4437); }
   .timer-display.recording { color: #c62828; }
   .rec-status {
@@ -1667,11 +1667,12 @@ const LIVE_TEMPLATE = `
             <ha-icon icon="mdi:play" style="--mdc-icon-size:16px"></ha-icon>
             Start
           </button>
+          <span class="timer-display" id="timerLive">--:--</span>
           <button class="ctrl-btn" id="btnRecord" disabled>
             <ha-icon icon="mdi:record" style="--mdc-icon-size:16px"></ha-icon>
             Record
           </button>
-          <div class="timer-display" id="timerDisplay">--:--</div>
+          <span class="timer-display" id="timerRec">--:--</span>
         </div>
         <div class="rec-status" id="recStatus"></div>
       </div>
@@ -2085,7 +2086,10 @@ class DragontreeReolinkLiveCard extends HTMLElement {
   _camBadgesHtml(cam) {
     const parts = [];
     if (!cam.online) parts.push('<span class="badge-offline">Offline</span>');
-    if (this._isAutoRecording(cam.name)) {
+    // Manual recording: timer running means this client started/detected a manual rec
+    if (cam.name === this._selectedCamera?.name && this._recTimerInterval !== null) {
+      parts.push('<span class="badge-manrec-list">Rec</span>');
+    } else if (this._isAutoRecording(cam.name)) {
       parts.push('<span class="badge-rec-list">Recording</span>');
     }
     return parts.join('');
@@ -2146,20 +2150,29 @@ class DragontreeReolinkLiveCard extends HTMLElement {
   }
 
   _updateTimerDisplay() {
-    const el = this.shadowRoot.getElementById('timerDisplay');
-    if (!el) return;
+    const liveEl = this.shadowRoot.getElementById('timerLive');
+    const recEl  = this.shadowRoot.getElementById('timerRec');
 
-    const isManualRec = this._selectedCamera && this._isManualRecording(this._selectedCamera);
+    if (liveEl) {
+      if (this._isLive) {
+        liveEl.textContent = this._formatSecs(this._liveSecondsLeft);
+        liveEl.className = 'timer-display active' +
+          (this._liveSecondsLeft <= 30 ? ' urgent' : '');
+      } else {
+        liveEl.textContent = '--:--';
+        liveEl.className = 'timer-display';
+      }
+    }
 
-    if (isManualRec && this._recTimerInterval !== null) {
-      el.textContent = 'REC ' + this._formatSecs(this._recSecondsLeft);
-      el.className = 'timer-display recording' + (this._recSecondsLeft <= 30 ? ' urgent' : '');
-    } else if (this._isLive) {
-      el.textContent = this._formatSecs(this._liveSecondsLeft);
-      el.className = 'timer-display' + (this._liveSecondsLeft <= 30 ? ' urgent' : '');
-    } else {
-      el.textContent = '--:--';
-      el.className = 'timer-display';
+    if (recEl) {
+      if (this._recTimerInterval !== null) {
+        recEl.textContent = this._formatSecs(this._recSecondsLeft);
+        recEl.className = 'timer-display recording' +
+          (this._recSecondsLeft <= 30 ? ' urgent' : '');
+      } else {
+        recEl.textContent = '--:--';
+        recEl.className = 'timer-display';
+      }
     }
   }
 
@@ -2173,9 +2186,6 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     const parts = [];
     if (this._isAutoRecording(this._selectedCamera.name)) {
       parts.push('<span class="status-badge badge-auto-rec">Auto Recording in Progress</span>');
-    }
-    if (this._isManualRecording(this._selectedCamera)) {
-      parts.push('<span class="status-badge badge-manual-rec">Manual Recording</span>');
     }
     statusEl.innerHTML = parts.join('');
 
