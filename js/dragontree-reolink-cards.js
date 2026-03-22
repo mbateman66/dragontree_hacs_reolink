@@ -1638,8 +1638,13 @@ const LIVE_STYLE = `
     min-height: 0;
     position: relative;
   }
-  #liveWrapper:fullscreen {
+  #liveWrapper:fullscreen,
+  #liveWrapper.fake-fullscreen {
     background: #000;
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    border-radius: 0;
     width: 100vw;
     height: 100vh;
   }
@@ -1875,6 +1880,7 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     this._cameras = [];
     this._selectedCamera = null;
     this._isLive = false;
+    this._fakeFullscreen = false;
     const stored = localStorage.getItem('dragontree_reolink_muted');
     this._muted = stored === null ? true : stored === 'true';
 
@@ -2281,10 +2287,27 @@ class DragontreeReolinkLiveCard extends HTMLElement {
   _toggleFullscreen() {
     const wrapper = this.shadowRoot.getElementById('liveWrapper');
     if (!wrapper) return;
-    if (document.fullscreenElement) {
-      document.exitFullscreen();
+    if (document.fullscreenElement || this._fakeFullscreen) {
+      // Exit fullscreen
+      if (document.fullscreenElement) document.exitFullscreen();
+      if (this._fakeFullscreen) {
+        this._fakeFullscreen = false;
+        wrapper.classList.remove('fake-fullscreen');
+        this._updateFullscreenButton();
+      }
+    } else if (wrapper.requestFullscreen) {
+      // Native fullscreen (Chrome, Firefox, Android)
+      wrapper.requestFullscreen().catch(() => {
+        // Fallback if native request fails unexpectedly
+        this._fakeFullscreen = true;
+        wrapper.classList.add('fake-fullscreen');
+        this._updateFullscreenButton();
+      });
     } else {
-      wrapper.requestFullscreen();
+      // iOS Safari — no requestFullscreen support; use CSS overlay
+      this._fakeFullscreen = true;
+      wrapper.classList.add('fake-fullscreen');
+      this._updateFullscreenButton();
     }
   }
 
@@ -2292,11 +2315,8 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     const btn = this.shadowRoot.getElementById('btnFullscreen');
     if (!btn) return;
     btn.disabled = !this._isLive;
-    if (document.fullscreenElement) {
-      btn.innerHTML = '<ha-icon icon="mdi:fullscreen-exit" style="--mdc-icon-size:16px"></ha-icon> Exit';
-    } else {
-      btn.innerHTML = '<ha-icon icon="mdi:fullscreen" style="--mdc-icon-size:16px"></ha-icon> Fullscreen';
-    }
+    const isFs = !!document.fullscreenElement || this._fakeFullscreen;
+    btn.innerHTML = `<ha-icon icon="${isFs ? 'mdi:fullscreen-exit' : 'mdi:fullscreen'}" style="--mdc-icon-size:18px"></ha-icon>`;
   }
 
   _updateRecordButton() {
