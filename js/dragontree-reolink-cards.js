@@ -1809,15 +1809,6 @@ const LIVE_STYLE = `
     z-index: 5;
   }
   .stream-overlay.visible { display: block; }
-  .overlay-title {
-    font-size: 0.78em;
-    font-weight: 500;
-    color: rgba(255, 255, 255, 0.7);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    margin-bottom: 6px;
-  }
   .overlay-controls {
     display: flex;
     align-items: center;
@@ -1955,7 +1946,6 @@ const LIVE_TEMPLATE = `
           <div class="no-selection">Select a camera to view</div>
         </div>
         <div class="stream-overlay" id="streamOverlay">
-          <div class="overlay-title" id="overlayTitle"></div>
           <div class="overlay-controls">
             <button class="ctrl-btn" id="btnPlayPause" disabled>
               <ha-icon icon="mdi:play" style="--mdc-icon-size:16px"></ha-icon>
@@ -2368,8 +2358,6 @@ class DragontreeReolinkLiveCard extends HTMLElement {
   }
 
   _updateControlsTitle() {
-    const title = this.shadowRoot.getElementById('overlayTitle');
-    if (title) title.textContent = this._selectedCamera?.name ?? '';
     const overlay = this.shadowRoot.getElementById('streamOverlay');
     if (overlay) overlay.classList.toggle('visible', !!this._selectedCamera);
   }
