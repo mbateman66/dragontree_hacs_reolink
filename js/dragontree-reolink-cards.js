@@ -44,6 +44,13 @@ function formatDuration(seconds) {
   return `${Math.floor(s / 60)}m ${s % 60}s`;
 }
 
+/** Format a number of seconds as M:SS (e.g. 83 → "1:23"). Returns '--:--' for non-finite values. */
+function fmtVideoTime(s) {
+  return isFinite(s) ? `${Math.floor(s / 60)}:${pad(Math.floor(s % 60))}` : '--:--';
+}
+
+const TIME_DISPLAY_EMPTY = '--:-- / --:--';
+
 /** Parse the triggers JSON stored in the DB into an array of strings. */
 function parseTriggers(triggersJson) {
   if (!triggersJson) return [];
@@ -170,6 +177,10 @@ const PLAYER_STYLE = `
     accent-color: #fff;
     cursor: pointer;
     height: 4px;
+  }
+  .seek-bar:disabled {
+    opacity: 0.35;
+    cursor: default;
   }
 
   /* Right panel */
@@ -467,7 +478,11 @@ const TEMPLATE = `
         <input type="range" class="seek-bar" id="seekBar" value="0" min="0" max="100" step="0.1">
         <div class="controls-row">
           <button class="ctrl-btn" id="btnPrev" disabled>&#9664; Prev</button>
+          <button class="ctrl-btn icon-only" id="btnPlayPause" disabled>
+            <ha-icon icon="mdi:play" style="--mdc-icon-size:18px"></ha-icon>
+          </button>
           <button class="ctrl-btn" id="btnNext" disabled>Next &#9654;</button>
+          <span class="timer" id="timeDisplay">--:-- / --:--</span>
           <div class="ctrl-spacer"></div>
           <button class="ctrl-btn icon-only" id="btnMute">
             <ha-icon icon="mdi:volume-high" style="--mdc-icon-size:18px"></ha-icon>
@@ -816,6 +831,13 @@ class DragontreeReolinkPlayback extends HTMLElement {
       if (i !== -1) this._selectRecording(i);
     });
 
+    sr.getElementById('btnPlayPause').addEventListener('click', () => {
+      const video = this.shadowRoot.getElementById('videoArea')?.querySelector('video');
+      if (!video) return;
+      if (video.paused || video.ended) video.play();
+      else video.pause();
+    });
+
     sr.getElementById('btnNext').addEventListener('click', () => {
       const i = this._newerIndex();
       if (i !== -1) this._selectRecording(i);
@@ -1015,24 +1037,44 @@ class DragontreeReolinkPlayback extends HTMLElement {
     const video = videoArea.querySelector('video');
     video.muted = this._muted;
 
-    const seekBar = this.shadowRoot.getElementById('seekBar');
-    if (seekBar) {
-      seekBar.value = 0;
-      video.addEventListener('loadedmetadata', () => { seekBar.max = video.duration; });
-      video.addEventListener('timeupdate', () => {
-        if (!seekBar._seeking) seekBar.value = video.currentTime;
-      });
-      seekBar.addEventListener('mousedown',  () => { seekBar._seeking = true; });
-      seekBar.addEventListener('touchstart', () => { seekBar._seeking = true; }, { passive: true });
-      seekBar.addEventListener('input',  () => { video.currentTime = seekBar.value; });
-      seekBar.addEventListener('change', () => { video.currentTime = seekBar.value; seekBar._seeking = false; });
-    }
+    // Clone seekBar to clear any listeners accumulated from previous recordings.
+    const oldSeek = this.shadowRoot.getElementById('seekBar');
+    const seekBar = oldSeek.cloneNode(true);
+    oldSeek.replaceWith(seekBar);
 
+    const timeDisplay = this.shadowRoot.getElementById('timeDisplay');
+    const updateTime = () => {
+      if (timeDisplay) timeDisplay.textContent = `${fmtVideoTime(video.currentTime)} / ${fmtVideoTime(video.duration)}`;
+    };
+    seekBar.value = 0;
+    if (timeDisplay) timeDisplay.textContent = TIME_DISPLAY_EMPTY;
+    video.addEventListener('loadedmetadata', () => { seekBar.max = video.duration; updateTime(); });
+    video.addEventListener('timeupdate', () => {
+      if (!seekBar._seeking) { seekBar.value = video.currentTime; updateTime(); }
+    });
+    seekBar.addEventListener('mousedown',  () => { seekBar._seeking = true; });
+    seekBar.addEventListener('touchstart', () => { seekBar._seeking = true; }, { passive: true });
+    seekBar.addEventListener('input',  () => { video.currentTime = seekBar.value; updateTime(); });
+    seekBar.addEventListener('change', () => { video.currentTime = seekBar.value; seekBar._seeking = false; });
+
+    video.addEventListener('play',  () => this._updatePlayPauseButton());
+    video.addEventListener('pause', () => this._updatePlayPauseButton());
     video.addEventListener('ended', () => {
       const i = this._newerIndex();
       if (i !== -1) this._selectRecording(i);
+      else this._updatePlayPauseButton();
     });
     this._updateMuteButton();
+    this._updatePlayPauseButton();
+  }
+
+  _updatePlayPauseButton() {
+    const btn = this.shadowRoot.getElementById('btnPlayPause');
+    if (!btn) return;
+    const video = this.shadowRoot.getElementById('videoArea')?.querySelector('video');
+    btn.disabled = !video;
+    const icon = (!video || video.paused || video.ended) ? 'mdi:play' : 'mdi:pause';
+    btn.innerHTML = `<ha-icon icon="${icon}" style="--mdc-icon-size:18px"></ha-icon>`;
   }
 
   // ── Time-direction helpers ────────────────────────────────────────────────
@@ -1055,9 +1097,18 @@ class DragontreeReolinkPlayback extends HTMLElement {
     const sr = this.shadowRoot;
     const prev = sr.getElementById('btnPrev');
     const next = sr.getElementById('btnNext');
-    if (!prev || !next) return;
-    prev.disabled = this._olderIndex() === -1;
-    next.disabled = this._newerIndex() === -1;
+    const fs = sr.getElementById('btnFullscreen');
+    const seek = sr.getElementById('seekBar');
+    const hasContent = this._selectedIndex >= 0;
+    if (prev) prev.disabled = this._olderIndex() === -1;
+    if (next) next.disabled = this._newerIndex() === -1;
+    if (fs) fs.disabled = !hasContent;
+    if (seek) seek.disabled = !hasContent;
+    if (!hasContent) {
+      this._updatePlayPauseButton();
+      const td = sr.getElementById('timeDisplay');
+      if (td) td.textContent = TIME_DISPLAY_EMPTY;
+    }
   }
 
   // ── Thumbnail resolution ──────────────────────────────────────────────────
