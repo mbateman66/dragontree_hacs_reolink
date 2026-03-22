@@ -1875,7 +1875,7 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     this._cameras = [];
     this._selectedCamera = null;
     this._isLive = false;
-    this._muted = false;
+    this._muted = localStorage.getItem('dragontree_reolink_muted') === 'true';
 
     this._liveTimeoutSecs = DragontreeReolinkLiveCard._DEFAULT_LIVE_TIMEOUT;
     this._liveSecondsLeft = 0;
@@ -2263,6 +2263,7 @@ class DragontreeReolinkLiveCard extends HTMLElement {
 
   _toggleMute() {
     this._muted = !this._muted;
+    localStorage.setItem('dragontree_reolink_muted', this._muted);
     const streamEl = this.shadowRoot.getElementById('streamContent')
       ?.querySelector('ha-camera-stream');
     if (streamEl) streamEl.muted = this._muted;
