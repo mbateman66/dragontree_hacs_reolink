@@ -2130,17 +2130,17 @@ class DragontreeReolinkLiveCard extends HTMLElement {
       return;
     }
 
-    const isAutoRec = this._isAutoRecording(this._selectedCamera.name);
     const isManualRec = this._isManualRecording(this._selectedCamera);
+    const isAutoRec = !isManualRec && this._isAutoRecording(this._selectedCamera.name);
 
-    if (isAutoRec) {
-      btn.disabled = true;
-      btn.classList.remove('recording-active');
-      btn.innerHTML = '<ha-icon icon="mdi:record" style="--mdc-icon-size:16px"></ha-icon> Record';
-    } else if (isManualRec) {
+    if (isManualRec) {
       btn.disabled = false;
       btn.classList.add('recording-active');
       btn.innerHTML = '<ha-icon icon="mdi:stop" style="--mdc-icon-size:16px"></ha-icon> Stop Rec';
+    } else if (isAutoRec) {
+      btn.disabled = true;
+      btn.classList.remove('recording-active');
+      btn.innerHTML = '<ha-icon icon="mdi:record" style="--mdc-icon-size:16px"></ha-icon> Record';
     } else {
       btn.disabled = !this._selectedCamera.record_entity_id;
       btn.classList.remove('recording-active');
@@ -2183,7 +2183,8 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     }
 
     const parts = [];
-    if (this._isAutoRecording(this._selectedCamera.name)) {
+    if (!this._isManualRecording(this._selectedCamera) &&
+        this._isAutoRecording(this._selectedCamera.name)) {
       parts.push('<span class="status-badge badge-auto-rec">Auto Recording in Progress</span>');
     }
     statusEl.innerHTML = parts.join('');
