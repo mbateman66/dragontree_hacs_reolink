@@ -1875,7 +1875,8 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     this._cameras = [];
     this._selectedCamera = null;
     this._isLive = false;
-    this._muted = localStorage.getItem('dragontree_reolink_muted') === 'true';
+    const stored = localStorage.getItem('dragontree_reolink_muted');
+    this._muted = stored === null ? true : stored === 'true';
 
     this._liveTimeoutSecs = DragontreeReolinkLiveCard._DEFAULT_LIVE_TIMEOUT;
     this._liveSecondsLeft = 0;
