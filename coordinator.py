@@ -843,6 +843,29 @@ class ReolinkDownloadCoordinator:
 
         return cam_slugs
 
+    def _find_camera_entities(self) -> dict[str, str]:
+        """Return {camera_name: camera_entity_id} for Reolink camera entities.
+
+        Prefers the main stream entity over the sub stream (_sub suffix).
+        """
+        cam_slugs = self._collect_cam_slugs()
+
+        if not cam_slugs:
+            return {}
+
+        all_camera_ids = self.hass.states.async_entity_ids("camera")
+        result: dict[str, str] = {}
+
+        for cam_slug, cam_name in cam_slugs.items():
+            matches = [eid for eid in all_camera_ids if cam_slug in eid]
+            if not matches:
+                continue
+            # Prefer main stream (non-_sub)
+            main = [m for m in matches if not m.endswith("_sub")]
+            result[cam_name] = main[0] if main else matches[0]
+
+        return result
+
     def _find_cam_entities_by_suffix(self, suffix: str, domain: str) -> dict[str, str]:
         """Return {camera_name: entity_id} for Reolink entities matching suffix in domain."""
         cam_slugs = self._collect_cam_slugs()
@@ -942,6 +965,8 @@ class ReolinkDownloadCoordinator:
         pir_entities = self._find_pir_entities()
         rfa_entities = self._find_cam_entities_by_suffix("_pir_reduce_false_alarm", "switch")
         sens_entities = self._find_cam_entities_by_suffix("_pir_sensitivity", "number")
+        record_entities = self._find_cam_entities_by_suffix("_record", "switch")
+        camera_entities = self._find_camera_entities()
         cameras_cfg = self._schedule.get("cameras", {})
         result = []
         for cam_name, pir_entity_id in pir_entities.items():
@@ -974,6 +999,8 @@ class ReolinkDownloadCoordinator:
                 "pir_entity_id": pir_entity_id,
                 "rfa_entity_id": rfa_entity_id,
                 "sensitivity_entity_id": sens_entity_id,
+                "record_entity_id": record_entities.get(cam_name),
+                "camera_entity_id": camera_entities.get(cam_name),
                 "in_schedule": in_schedule,
                 "enabled": _bool_state(state),
                 "rfa_enabled": _bool_state(rfa_state),

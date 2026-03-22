@@ -1,0 +1,10 @@
+##########################################################################
+# VIEW: Live Camera View
+##########################################################################
+- title: Live View
+  path: live
+  icon: mdi:video
+  panel: true
+  cards:
+    - type: custom:dragontree-reolink-live
+      live_timeout_seconds: 120
