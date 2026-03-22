@@ -131,6 +131,13 @@ const STYLE = `
     z-index: 5;
   }
   .video-overlay.visible { display: block; }
+  .seek-bar {
+    width: 100%;
+    margin-bottom: 6px;
+    accent-color: #fff;
+    cursor: pointer;
+    height: 4px;
+  }
   .overlay-controls {
     display: flex;
     align-items: center;
@@ -354,6 +361,7 @@ const TEMPLATE = `
           <div class="no-selection">Select a recording to play</div>
         </div>
         <div class="video-overlay" id="videoOverlay">
+          <input type="range" class="seek-bar" id="seekBar" value="0" min="0" max="100" step="0.1">
           <div class="overlay-controls">
             <button class="ctrl-btn" id="btnPrev" disabled>&#9664; Prev</button>
             <button class="ctrl-btn" id="btnNext" disabled>Next &#9654;</button>
@@ -904,8 +912,21 @@ class DragontreeReolinkPlayback extends HTMLElement {
     content.innerHTML = `<video autoplay playsinline src="${url}"></video>`;
     const video = content.querySelector('video');
     video.muted = this._muted;
+
+    const seekBar = this.shadowRoot.getElementById('seekBar');
+    if (seekBar) {
+      seekBar.value = 0;
+      video.addEventListener('loadedmetadata', () => { seekBar.max = video.duration; });
+      video.addEventListener('timeupdate', () => {
+        if (!seekBar._seeking) seekBar.value = video.currentTime;
+      });
+      seekBar.addEventListener('mousedown',  () => { seekBar._seeking = true; });
+      seekBar.addEventListener('touchstart', () => { seekBar._seeking = true; }, { passive: true });
+      seekBar.addEventListener('input',  () => { video.currentTime = seekBar.value; });
+      seekBar.addEventListener('change', () => { video.currentTime = seekBar.value; seekBar._seeking = false; });
+    }
+
     video.addEventListener('ended', () => {
-      // Auto-advance forward in time when playback ends
       const i = this._newerIndex();
       if (i !== -1) this._selectRecording(i);
     });
