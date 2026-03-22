@@ -72,11 +72,20 @@ const STYLE = `
       min-height: 400px;
     }
     .video-wrapper {
-      aspect-ratio: 16 / 9;
-      flex: none; /* size from aspect-ratio, not flex */
+      flex: none;
+      display: flex;
+      flex-direction: column;
     }
     #videoContent {
-      bottom: 56px; /* leave room for seek bar + controls overlay */
+      position: relative;
+      aspect-ratio: 16 / 9;
+      width: 100%;
+      flex-shrink: 0;
+    }
+    .video-overlay {
+      position: relative;
+      background: rgba(0, 0, 0, 0.9);
+      padding: 6px 12px 8px;
     }
   }
 
@@ -1743,11 +1752,20 @@ const LIVE_STYLE = `
       min-height: 400px;
     }
     .live-wrapper {
-      aspect-ratio: 16 / 9;
       flex: none;
+      display: flex;
+      flex-direction: column;
     }
     #streamContent {
-      bottom: 40px; /* leave room for controls overlay */
+      position: relative;
+      aspect-ratio: 16 / 9;
+      width: 100%;
+      flex-shrink: 0;
+    }
+    .stream-overlay {
+      position: relative;
+      background: rgba(0, 0, 0, 0.9);
+      padding: 8px 12px;
     }
   }
 
