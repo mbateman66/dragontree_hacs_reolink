@@ -1637,42 +1637,25 @@ const LIVE_STYLE = `
     flex: 1;
     min-height: 0;
     position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-  .live-wrapper ha-camera-stream {
-    width: 100%;
-    height: 100%;
   }
   #liveWrapper:fullscreen {
     background: #000;
     width: 100vw;
     height: 100vh;
   }
-  #liveWrapper:fullscreen ha-camera-stream {
-    width: 100%;
-    height: 100%;
-  }
-  #liveWrapper:fullscreen .fs-exit-btn {
-    display: flex;
-  }
-  .fs-exit-btn {
-    display: none;
+
+  /* ── Stream content (video / placeholder) ── */
+  #streamContent {
     position: absolute;
-    top: 12px;
-    right: 12px;
-    z-index: 10;
-    background: rgba(0, 0, 0, 0.5);
-    border: none;
-    border-radius: 4px;
-    color: #fff;
-    padding: 6px;
-    cursor: pointer;
+    inset: 0;
+    display: flex;
     align-items: center;
     justify-content: center;
   }
-  .fs-exit-btn:hover { background: rgba(0, 0, 0, 0.75); }
+  #streamContent ha-camera-stream {
+    width: 100%;
+    height: 100%;
+  }
   .no-selection, .paused-overlay {
     color: #888;
     font-size: 0.9em;
@@ -1688,51 +1671,38 @@ const LIVE_STYLE = `
     color: #555;
   }
 
-  /* ── Right panel ── */
-  .right-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    min-height: 0;
-    overflow: hidden;
+  /* ── Stream overlay controls ── */
+  .stream-overlay {
+    display: none;
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(transparent, rgba(0, 0, 0, 0.72));
+    padding: 28px 12px 10px;
+    z-index: 5;
   }
-
-  /* ── Controls panel (mirrors filter-panel position) ── */
-  .controls-panel {
-    background: var(--card-background-color, #fff);
-    border-radius: 8px;
-    border: 1px solid var(--divider-color, #e0e0e0);
-    flex-shrink: 0;
-    padding: 12px 14px;
-  }
-  .cam-title {
-    font-size: 0.82em;
+  .stream-overlay.visible { display: block; }
+  .overlay-title {
+    font-size: 0.78em;
     font-weight: 500;
-    color: var(--secondary-text-color, #666);
-    margin-bottom: 8px;
+    color: rgba(255, 255, 255, 0.7);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    margin-bottom: 6px;
   }
-  .cam-title.selected {
-    color: var(--primary-text-color, #212121);
-    font-size: 1em;
-    font-weight: 600;
-    text-transform: none;
-    letter-spacing: 0;
-  }
-  .controls-row {
+  .overlay-controls {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
   }
+  .overlay-spacer { flex: 1; }
   .ctrl-btn {
-    background: transparent;
-    border: 1px solid var(--divider-color, #e0e0e0);
-    color: var(--primary-text-color, #212121);
-    padding: 6px 12px;
+    background: rgba(255, 255, 255, 0.15);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    color: #fff;
+    padding: 5px 10px;
     border-radius: 4px;
     cursor: pointer;
     font-size: 0.82em;
@@ -1742,47 +1712,36 @@ const LIVE_STYLE = `
     transition: background 0.15s;
     white-space: nowrap;
   }
-  .ctrl-btn:hover:not([disabled]) { background: var(--secondary-background-color, #f5f5f5); }
+  .ctrl-btn:hover:not([disabled]) { background: rgba(255, 255, 255, 0.28); }
   .ctrl-btn[disabled] { opacity: 0.35; cursor: default; }
+  .ctrl-btn.icon-only { padding: 5px; }
   .ctrl-btn.live {
     background: var(--primary-color, #03a9f4);
     border-color: var(--primary-color, #03a9f4);
-    color: #fff;
   }
   .ctrl-btn.recording-active {
     background: #c62828;
     border-color: #c62828;
-    color: #fff;
   }
   .timer-display {
     font-size: 0.88em;
     font-variant-numeric: tabular-nums;
-    color: var(--secondary-text-color, #888);
+    color: rgba(255, 255, 255, 0.55);
     font-weight: 500;
     min-width: 36px;
     white-space: nowrap;
   }
-  .timer-display.active { color: var(--primary-text-color, #212121); }
-  .timer-display.urgent { color: var(--error-color, #db4437); }
-  .timer-display.recording { color: #c62828; }
-  .rec-status {
-    margin-top: 8px;
+  .timer-display.active { color: #fff; }
+  .timer-display.urgent { color: #ef5350; }
+  .timer-display.recording { color: #ef9a9a; }
+
+  /* ── Right panel ── */
+  .right-panel {
     display: flex;
-    gap: 6px;
-    flex-wrap: wrap;
+    flex-direction: column;
     min-height: 0;
+    overflow: hidden;
   }
-  .rec-status:empty { margin-top: 0; }
-  .status-badge {
-    font-size: 0.68em;
-    font-weight: 700;
-    letter-spacing: 0.05em;
-    padding: 2px 6px;
-    border-radius: 3px;
-    text-transform: uppercase;
-  }
-  .badge-auto-rec { background: #fce4ec; color: #b71c1c; }
-  .badge-manual-rec { background: #c62828; color: #fff; }
 
   /* ── Camera list ── */
   .list-panel {
@@ -1866,35 +1825,35 @@ const LIVE_TEMPLATE = `
 
     <div class="player-panel">
       <div class="live-wrapper" id="liveWrapper">
-        <div class="no-selection">Select a camera to view</div>
-        <button class="fs-exit-btn" id="btnExitFs">
-          <ha-icon icon="mdi:fullscreen-exit" style="--mdc-icon-size:20px"></ha-icon>
-        </button>
+        <div id="streamContent">
+          <div class="no-selection">Select a camera to view</div>
+        </div>
+        <div class="stream-overlay" id="streamOverlay">
+          <div class="overlay-title" id="overlayTitle"></div>
+          <div class="overlay-controls">
+            <button class="ctrl-btn" id="btnPlayPause" disabled>
+              <ha-icon icon="mdi:play" style="--mdc-icon-size:16px"></ha-icon>
+              Start
+            </button>
+            <span class="timer-display" id="timerLive">--:--</span>
+            <button class="ctrl-btn" id="btnRecord" disabled>
+              <ha-icon icon="mdi:record" style="--mdc-icon-size:16px"></ha-icon>
+              Record
+            </button>
+            <span class="timer-display" id="timerRec">--:--</span>
+            <div class="overlay-spacer"></div>
+            <button class="ctrl-btn icon-only" id="btnMute" disabled>
+              <ha-icon icon="mdi:volume-high" style="--mdc-icon-size:18px"></ha-icon>
+            </button>
+            <button class="ctrl-btn icon-only" id="btnFullscreen" disabled>
+              <ha-icon icon="mdi:fullscreen" style="--mdc-icon-size:18px"></ha-icon>
+            </button>
+          </div>
+        </div>
       </div>
     </div>
 
     <div class="right-panel">
-      <div class="controls-panel">
-        <div class="cam-title" id="camTitle">No camera selected</div>
-        <div class="controls-row">
-          <button class="ctrl-btn" id="btnPlayPause" disabled>
-            <ha-icon icon="mdi:play" style="--mdc-icon-size:16px"></ha-icon>
-            Start
-          </button>
-          <span class="timer-display" id="timerLive">--:--</span>
-          <button class="ctrl-btn" id="btnRecord" disabled>
-            <ha-icon icon="mdi:record" style="--mdc-icon-size:16px"></ha-icon>
-            Record
-          </button>
-          <span class="timer-display" id="timerRec">--:--</span>
-          <button class="ctrl-btn" id="btnFullscreen" disabled>
-            <ha-icon icon="mdi:fullscreen" style="--mdc-icon-size:16px"></ha-icon>
-            Fullscreen
-          </button>
-        </div>
-        <div class="rec-status" id="recStatus"></div>
-      </div>
-
       <div class="list-panel" id="listPanel">
         <div class="list-msg">Loading…</div>
       </div>
@@ -1916,6 +1875,7 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     this._cameras = [];
     this._selectedCamera = null;
     this._isLive = false;
+    this._muted = false;
 
     this._liveTimeoutSecs = DragontreeReolinkLiveCard._DEFAULT_LIVE_TIMEOUT;
     this._liveSecondsLeft = 0;
@@ -1946,7 +1906,7 @@ class DragontreeReolinkLiveCard extends HTMLElement {
       return;
     }
     // Keep the camera stream's hass reference current (needed for auth token refresh)
-    const streamEl = this.shadowRoot.getElementById('liveWrapper')
+    const streamEl = this.shadowRoot.getElementById('streamContent')
       ?.querySelector('ha-camera-stream');
     if (streamEl) streamEl.hass = hass;
 
@@ -2008,7 +1968,7 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     });
 
     sr.getElementById('btnFullscreen').addEventListener('click', () => this._toggleFullscreen());
-    sr.getElementById('btnExitFs').addEventListener('click', () => document.exitFullscreen());
+    sr.getElementById('btnMute').addEventListener('click', () => this._toggleMute());
 
     sr.getElementById('liveWrapper').addEventListener('fullscreenchange', () => {
       this._updateFullscreenButton();
@@ -2023,7 +1983,7 @@ class DragontreeReolinkLiveCard extends HTMLElement {
       if (isOn) this._stopRecordDisplay(); // optimistically hide timer on stop
       this._updateRecordButton();
       this._updateTimerDisplay();
-      this._updateControlsStatus();
+      
       try {
         await this._hass.callService('switch', isOn ? 'turn_off' : 'turn_on',
           { entity_id: entityId });
@@ -2033,7 +1993,7 @@ class DragontreeReolinkLiveCard extends HTMLElement {
         if (!isOn) this._stopRecordDisplay();
         this._updateRecordButton();
         this._updateTimerDisplay();
-        this._updateControlsStatus();
+        
       }
     });
   }
@@ -2049,7 +2009,7 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     this._renderCameraList();
     this._updateControlsTitle();
     this._updateRecordButton();
-    this._updateControlsStatus();
+    
     this._startLive();
   }
 
@@ -2071,15 +2031,15 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     this._isLive = true;
     this._liveSecondsLeft = this._liveTimeoutSecs;
 
-    const wrapper = this.shadowRoot.getElementById('liveWrapper');
-    if (wrapper) {
-      wrapper.innerHTML = '';
+    const content = this.shadowRoot.getElementById('streamContent');
+    if (content) {
+      content.innerHTML = '';
       const streamEl = document.createElement('ha-camera-stream');
       streamEl.hass = this._hass;
       streamEl.stateObj = this._hass.states[cameraEntityId];
       streamEl.controls = false;
-      streamEl.muted = false;
-      wrapper.appendChild(streamEl);
+      streamEl.muted = this._muted;
+      content.appendChild(streamEl);
     }
 
     clearInterval(this._liveTimerInterval);
@@ -2101,16 +2061,16 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     clearInterval(this._liveTimerInterval);
     this._liveTimerInterval = null;
 
-    const wrapper = this.shadowRoot.getElementById('liveWrapper');
-    if (wrapper) {
+    const content = this.shadowRoot.getElementById('streamContent');
+    if (content) {
       if (this._selectedCamera) {
-        wrapper.innerHTML = `
+        content.innerHTML = `
           <div class="paused-overlay">
             <ha-icon icon="mdi:pause-circle-outline"></ha-icon>
             <div>Live view paused — press Start to resume</div>
           </div>`;
       } else {
-        wrapper.innerHTML = `<div class="no-selection">Select a camera to view</div>`;
+        content.innerHTML = `<div class="no-selection">Select a camera to view</div>`;
       }
     }
 
@@ -2194,7 +2154,7 @@ class DragontreeReolinkLiveCard extends HTMLElement {
 
     this._updateRecordButton();
     this._updateTimerDisplay();
-    this._updateControlsStatus();
+    
   }
 
   // ── UI rendering ──────────────────────────────────────────────────────────
@@ -2280,15 +2240,10 @@ class DragontreeReolinkLiveCard extends HTMLElement {
   }
 
   _updateControlsTitle() {
-    const title = this.shadowRoot.getElementById('camTitle');
-    if (!title) return;
-    if (this._selectedCamera) {
-      title.textContent = this._selectedCamera.name;
-      title.classList.add('selected');
-    } else {
-      title.textContent = 'No camera selected';
-      title.classList.remove('selected');
-    }
+    const title = this.shadowRoot.getElementById('overlayTitle');
+    if (title) title.textContent = this._selectedCamera?.name ?? '';
+    const overlay = this.shadowRoot.getElementById('streamOverlay');
+    if (overlay) overlay.classList.toggle('visible', !!this._selectedCamera);
   }
 
   _updatePlayPauseButton() {
@@ -2303,6 +2258,22 @@ class DragontreeReolinkLiveCard extends HTMLElement {
       btn.classList.remove('live');
     }
     this._updateFullscreenButton();
+    this._updateMuteButton();
+  }
+
+  _toggleMute() {
+    this._muted = !this._muted;
+    const streamEl = this.shadowRoot.getElementById('streamContent')
+      ?.querySelector('ha-camera-stream');
+    if (streamEl) streamEl.muted = this._muted;
+    this._updateMuteButton();
+  }
+
+  _updateMuteButton() {
+    const btn = this.shadowRoot.getElementById('btnMute');
+    if (!btn) return;
+    btn.disabled = !this._isLive;
+    btn.innerHTML = `<ha-icon icon="${this._muted ? 'mdi:volume-off' : 'mdi:volume-high'}" style="--mdc-icon-size:18px"></ha-icon>`;
   }
 
   _toggleFullscreen() {
@@ -2376,18 +2347,6 @@ class DragontreeReolinkLiveCard extends HTMLElement {
         recEl.className = 'timer-display';
       }
     }
-  }
-
-  _updateControlsStatus() {
-    const statusEl = this.shadowRoot.getElementById('recStatus');
-    if (!statusEl || !this._selectedCamera) {
-      if (statusEl) statusEl.innerHTML = '';
-      return;
-    }
-
-    statusEl.innerHTML = '';
-
-    this._updateRecordButton();
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
