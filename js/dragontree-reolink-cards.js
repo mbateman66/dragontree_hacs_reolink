@@ -2078,7 +2078,7 @@ class DragontreeReolinkLiveCard extends HTMLElement {
       streamEl.hass = this._hass;
       streamEl.stateObj = this._hass.states[cameraEntityId];
       streamEl.controls = false;
-      streamEl.muted = true;
+      streamEl.muted = false;
       wrapper.appendChild(streamEl);
     }
 
