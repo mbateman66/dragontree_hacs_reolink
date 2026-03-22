@@ -965,7 +965,7 @@ class ReolinkDownloadCoordinator:
         pir_entities = self._find_pir_entities()
         rfa_entities = self._find_cam_entities_by_suffix("_pir_reduce_false_alarm", "switch")
         sens_entities = self._find_cam_entities_by_suffix("_pir_sensitivity", "number")
-        record_entities = self._find_cam_entities_by_suffix("_record", "switch")
+        record_entities = self._find_cam_entities_by_suffix("_manual_record", "switch")
         camera_entities = self._find_camera_entities()
         cameras_cfg = self._schedule.get("cameras", {})
         result = []
