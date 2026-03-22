@@ -90,11 +90,25 @@ const STYLE = `
     flex: 1;
     min-height: 0;
     position: relative;
+  }
+  #videoWrapper:fullscreen,
+  #videoWrapper.fake-fullscreen {
+    background: #000;
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    border-radius: 0;
+    width: 100vw;
+    height: 100vh;
+  }
+  #videoContent {
+    position: absolute;
+    inset: 0;
     display: flex;
     align-items: center;
     justify-content: center;
   }
-  video {
+  #videoContent video {
     width: 100%;
     height: 100%;
     object-fit: contain;
@@ -106,26 +120,40 @@ const STYLE = `
     text-align: center;
     padding: 24px;
   }
-  .player-controls {
+  .video-overlay {
+    display: none;
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(transparent, rgba(0, 0, 0, 0.72));
+    padding: 28px 12px 10px;
+    z-index: 5;
+  }
+  .video-overlay.visible { display: block; }
+  .overlay-controls {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 8px 12px;
-    background: #1a1a1a;
-    flex-shrink: 0;
+    gap: 6px;
   }
-  .player-controls button {
-    background: transparent;
-    border: 1px solid #555;
-    color: #ccc;
-    padding: 6px 14px;
+  .overlay-spacer { flex: 1; }
+  .ctrl-btn {
+    background: rgba(255, 255, 255, 0.15);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    color: #fff;
+    padding: 5px 10px;
     border-radius: 4px;
     cursor: pointer;
     font-size: 0.82em;
+    display: flex;
+    align-items: center;
+    gap: 4px;
     transition: background 0.15s;
+    white-space: nowrap;
   }
-  .player-controls button:hover { background: #333; color: #fff; }
-  .player-controls button:disabled { opacity: 0.3; cursor: default; }
+  .ctrl-btn:hover:not([disabled]) { background: rgba(255, 255, 255, 0.28); }
+  .ctrl-btn[disabled] { opacity: 0.35; cursor: default; }
+  .ctrl-btn.icon-only { padding: 5px; }
 
   /* ── Right panel ── */
   .right-panel {
@@ -322,11 +350,22 @@ const TEMPLATE = `
 
     <div class="player-panel">
       <div class="video-wrapper" id="videoWrapper">
-        <div class="no-selection">Select a recording to play</div>
-      </div>
-      <div class="player-controls">
-        <button id="btnPrev" disabled>&#9664; Prev</button>
-        <button id="btnNext" disabled>Next &#9654;</button>
+        <div id="videoContent">
+          <div class="no-selection">Select a recording to play</div>
+        </div>
+        <div class="video-overlay" id="videoOverlay">
+          <div class="overlay-controls">
+            <button class="ctrl-btn" id="btnPrev" disabled>&#9664; Prev</button>
+            <button class="ctrl-btn" id="btnNext" disabled>Next &#9654;</button>
+            <div class="overlay-spacer"></div>
+            <button class="ctrl-btn icon-only" id="btnMute">
+              <ha-icon icon="mdi:volume-high" style="--mdc-icon-size:18px"></ha-icon>
+            </button>
+            <button class="ctrl-btn icon-only" id="btnFullscreen">
+              <ha-icon icon="mdi:fullscreen" style="--mdc-icon-size:18px"></ha-icon>
+            </button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -377,6 +416,9 @@ class DragontreeReolinkPlayback extends HTMLElement {
     this._thumbCache = new Map(); // content_id → resolved URL
     this._unsubRecordingEvents = null;
     this._hasMore = true;
+    this._fakeFullscreen = false;
+    const stored = localStorage.getItem('dragontree_reolink_muted');
+    this._muted = stored === null ? true : stored === 'true';
     this._loadingMore = false;
     this._totalRecEntityId = null;  // sensor.dragontree_reolink_total_recordings
     this._lastTotalRec = null;      // last seen value of the sensor
@@ -492,6 +534,7 @@ class DragontreeReolinkPlayback extends HTMLElement {
     this.shadowRoot.innerHTML = TEMPLATE;
     this._restoreFilters();        // instant sessionStorage fast-path
     this._bindStaticEvents();
+    this._updateMuteButton();
     this._applyFilterPanelState(); // correct open/closed before any async work
     this._renderFilterInputs();
 
@@ -668,6 +711,13 @@ class DragontreeReolinkPlayback extends HTMLElement {
       const i = this._newerIndex();
       if (i !== -1) this._selectRecording(i);
     });
+
+    sr.getElementById('btnMute').addEventListener('click', () => this._toggleMute());
+    sr.getElementById('btnFullscreen').addEventListener('click', () => this._toggleFullscreen());
+
+    sr.getElementById('videoWrapper').addEventListener('fullscreenchange', () => {
+      this._updateFullscreenButton();
+    });
   }
 
   // ── Filter UI rendering ───────────────────────────────────────────────────
@@ -843,20 +893,70 @@ class DragontreeReolinkPlayback extends HTMLElement {
       this._playUrl(resolved.url);
     } catch (e) {
       console.error('[reolink] Failed to resolve media URL for', rec.content_id, e);
-      const wrapper = this.shadowRoot.getElementById('videoWrapper');
-      if (wrapper) wrapper.innerHTML = `<div class="no-selection">Could not load video</div>`;
+      const content = this.shadowRoot.getElementById('videoContent');
+      if (content) content.innerHTML = `<div class="no-selection">Could not load video</div>`;
     }
   }
 
   _playUrl(url) {
-    const wrapper = this.shadowRoot.getElementById('videoWrapper');
-    if (!wrapper) return;
-    wrapper.innerHTML = `<video controls autoplay playsinline src="${url}"></video>`;
-    wrapper.querySelector('video').addEventListener('ended', () => {
+    const content = this.shadowRoot.getElementById('videoContent');
+    if (!content) return;
+    content.innerHTML = `<video autoplay playsinline src="${url}"></video>`;
+    const video = content.querySelector('video');
+    video.muted = this._muted;
+    video.addEventListener('ended', () => {
       // Auto-advance forward in time when playback ends
       const i = this._newerIndex();
       if (i !== -1) this._selectRecording(i);
     });
+    this.shadowRoot.getElementById('videoOverlay')?.classList.add('visible');
+    this._updateMuteButton();
+  }
+
+  // ── Playback overlay controls ─────────────────────────────────────────────
+
+  _toggleMute() {
+    this._muted = !this._muted;
+    localStorage.setItem('dragontree_reolink_muted', this._muted);
+    const video = this.shadowRoot.getElementById('videoContent')?.querySelector('video');
+    if (video) video.muted = this._muted;
+    this._updateMuteButton();
+  }
+
+  _updateMuteButton() {
+    const btn = this.shadowRoot.getElementById('btnMute');
+    if (!btn) return;
+    btn.innerHTML = `<ha-icon icon="${this._muted ? 'mdi:volume-off' : 'mdi:volume-high'}" style="--mdc-icon-size:18px"></ha-icon>`;
+  }
+
+  _toggleFullscreen() {
+    const wrapper = this.shadowRoot.getElementById('videoWrapper');
+    if (!wrapper) return;
+    if (document.fullscreenElement || this._fakeFullscreen) {
+      if (document.fullscreenElement) document.exitFullscreen();
+      if (this._fakeFullscreen) {
+        this._fakeFullscreen = false;
+        wrapper.classList.remove('fake-fullscreen');
+        this._updateFullscreenButton();
+      }
+    } else if (wrapper.requestFullscreen) {
+      wrapper.requestFullscreen().catch(() => {
+        this._fakeFullscreen = true;
+        wrapper.classList.add('fake-fullscreen');
+        this._updateFullscreenButton();
+      });
+    } else {
+      this._fakeFullscreen = true;
+      wrapper.classList.add('fake-fullscreen');
+      this._updateFullscreenButton();
+    }
+  }
+
+  _updateFullscreenButton() {
+    const btn = this.shadowRoot.getElementById('btnFullscreen');
+    if (!btn) return;
+    const isFs = !!document.fullscreenElement || this._fakeFullscreen;
+    btn.innerHTML = `<ha-icon icon="${isFs ? 'mdi:fullscreen-exit' : 'mdi:fullscreen'}" style="--mdc-icon-size:18px"></ha-icon>`;
   }
 
   // ── Time-direction helpers ────────────────────────────────────────────────
