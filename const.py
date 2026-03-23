@@ -54,3 +54,7 @@ EVENT_RECORD_TIMER_CHANGED = f"{DOMAIN}_record_timer_changed"
 
 # Server-side timeout for manual recordings (seconds).
 MANUAL_REC_TIMEOUT_SECS = 120
+
+# Download retry policy
+DOWNLOAD_MAX_ATTEMPTS = 3
+DOWNLOAD_RETRY_DELAY_S = 5

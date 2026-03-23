@@ -33,6 +33,8 @@ from .const import (
     DEFAULT_MAX_DISK_GB,
     DEFAULT_STREAM,
     DOMAIN,
+    DOWNLOAD_MAX_ATTEMPTS,
+    DOWNLOAD_RETRY_DELAY_S,
     EVENT_QUEUE_CHANGED,
     EVENT_RECORD_TIMER_CHANGED,
     EVENT_RECORDING_ADDED,
@@ -84,12 +86,11 @@ def _trigger_names(triggers: Any) -> list[str]:
 def _vod_type_for(filename: str, is_nvr: bool, is_hub: bool = False) -> VodRequestType | None:
     """Return the appropriate VodRequestType for a file, or None if not downloadable.
 
-    Hub cameras use PLAYBACK/DOWNLOAD for all file types (mirrors Reolink media_source).
-    NVR mp4/vref → DOWNLOAD; NVR other → FLV (HTTP, saveable).
-    Camera mp4/vref → PLAYBACK; Camera other → RTMP (streaming, skip).
+    NVR/hub mp4/vref → DOWNLOAD (raw file transfer, as fast as possible).
+    Standalone camera mp4/vref → PLAYBACK; other → RTMP (streaming, skip).
     """
     if filename.endswith((".mp4", ".vref")) or is_hub:
-        return VodRequestType.DOWNLOAD if is_nvr else VodRequestType.PLAYBACK
+        return VodRequestType.DOWNLOAD if (is_nvr or is_hub) else VodRequestType.PLAYBACK
     if is_nvr:
         return VodRequestType.FLV
     return None  # RTMP — not directly downloadable
@@ -246,6 +247,7 @@ class ReolinkDownloadCoordinator:
         )
         await self._db.async_init()
         await self._load_from_db()
+        await self._cleanup_tmp_files()
 
         self._worker_task = self.hass.async_create_background_task(
             self._download_worker(), name="dragontree_reolink_worker"
@@ -667,6 +669,7 @@ class ReolinkDownloadCoordinator:
 
     async def _download_worker(self) -> None:
         """Process the queue one download at a time."""
+        _attempts: dict[str, int] = {}
         while True:
             try:
                 host, channel, entry_id, vod_file, file_path = await self._queue.get()
@@ -676,8 +679,9 @@ class ReolinkDownloadCoordinator:
                     self._pending_meta[file_path]["status"] = "downloading"
                 self._notify_sensors()
                 self.hass.bus.async_fire(EVENT_QUEUE_CHANGED)
+                success = False
                 try:
-                    await self._download_file(host, channel, vod_file, file_path)
+                    success = await self._download_file(host, channel, vod_file, file_path)
                 except Exception as err:
                     LOGGER.error(
                         "Download failed for %s: %s", os.path.basename(file_path), err
@@ -687,6 +691,31 @@ class ReolinkDownloadCoordinator:
                     self._pending_meta.pop(file_path, None)
                     self._queue.task_done()
                     self._notify_sensors()
+
+                if not success:
+                    attempt = _attempts.get(file_path, 0) + 1
+                    if attempt < DOWNLOAD_MAX_ATTEMPTS:
+                        _attempts[file_path] = attempt
+                        LOGGER.info(
+                            "Re-queuing %s after failure (attempt %d)",
+                            os.path.basename(file_path), attempt,
+                        )
+                        await asyncio.sleep(DOWNLOAD_RETRY_DELAY_S)
+                        await self._queue.put((host, channel, entry_id, vod_file, file_path))
+                        self._queued_paths.add(file_path)
+                        self._pending_meta[file_path] = self._build_pending_meta(
+                            host, channel, vod_file, file_path, "queued"
+                        )
+                        self._notify_sensors()
+                        self.hass.bus.async_fire(EVENT_QUEUE_CHANGED)
+                    else:
+                        _attempts.pop(file_path, None)
+                        LOGGER.warning(
+                            "Giving up on %s after %d attempts — poll will retry later",
+                            os.path.basename(file_path), DOWNLOAD_MAX_ATTEMPTS,
+                        )
+                else:
+                    _attempts.pop(file_path, None)
             except asyncio.CancelledError:
                 break
             except Exception as err:
@@ -694,15 +723,16 @@ class ReolinkDownloadCoordinator:
 
     async def _download_file(
         self, host: Any, channel: int, vod_file: Any, file_path: str
-    ) -> None:
-        """Download one VOD file to local storage."""
+    ) -> bool:
+        """Download one VOD file to local storage. Returns True on success."""
         filename = vod_file.file_name
         is_hub = getattr(host.api, "is_hub", False)
         vod_type = _vod_type_for(filename, host.api.is_nvr, is_hub)
         if vod_type is None:
-            return
+            return True  # not downloadable — treat as done, don't retry
 
         camera_name = host.api.camera_name(channel)
+        t0 = dt_util.now()
 
         try:
             _mime_type, url = await host.api.get_vod_source(
@@ -710,7 +740,8 @@ class ReolinkDownloadCoordinator:
             )
         except Exception as err:
             LOGGER.warning("Failed to get VOD URL for %s: %s", filename, err)
-            return
+            return False
+        t_url = dt_util.now()
 
         dir_path = os.path.dirname(file_path)
         await self.hass.async_add_executor_job(
@@ -726,11 +757,11 @@ class ReolinkDownloadCoordinator:
         try:
             async with session.get(
                 url,
-                timeout=ClientTimeout(total=300, connect=30, sock_connect=30, sock_read=120),
+                timeout=ClientTimeout(total=300, connect=30, sock_connect=30, sock_read=30),
             ) as resp:
                 if resp.status != 200:
                     LOGGER.warning("HTTP %s fetching %s — skipping", resp.status, filename)
-                    return
+                    return False
                 async with aiofiles.open(tmp_path, "wb") as fh:
                     async for chunk in resp.content.iter_chunked(65536):
                         total_size += len(chunk)
@@ -739,14 +770,15 @@ class ReolinkDownloadCoordinator:
             await self._remove_tmp(tmp_path)
             raise
         except Exception as err:
-            LOGGER.warning("Error downloading %s: %s", filename, err)
+            LOGGER.warning("Error downloading %s: %s: %s", filename, type(err).__name__, err)
             await self._remove_tmp(tmp_path)
-            return
+            return False
+        t_dl = dt_util.now()
 
         if total_size == 0:
             LOGGER.warning("Empty response for %s — skipping", filename)
             await self._remove_tmp(tmp_path)
-            return
+            return False
 
         await self._ensure_space(total_size)
         await self.hass.async_add_executor_job(os.rename, tmp_path, file_path)
@@ -772,6 +804,7 @@ class ReolinkDownloadCoordinator:
         else:
             _dur = None
         image_path, thumb_path = await self._extract_frames(file_path, _dur)
+        t_frames = dt_util.now()
 
         await self._db.upsert(
             self._build_db_record(
@@ -783,12 +816,17 @@ class ReolinkDownloadCoordinator:
         self.hass.bus.async_fire(EVENT_RECORDING_ADDED)
 
         LOGGER.info(
-            "Saved %s (%.1f MB) — total %.2f / %.2f GB",
+            "Saved %s (%.1f MB) — url=%.1fs dl=%.1fs frames=%.1fs total=%.1fs — disk %.2f / %.2f GB",
             os.path.basename(file_path),
             total_size / 1024**2,
+            (t_url - t0).total_seconds(),
+            (t_dl - t_url).total_seconds(),
+            (t_frames - t_dl).total_seconds(),
+            (t_frames - t0).total_seconds(),
             self._total_bytes / 1024**3,
             self.max_disk_bytes / 1024**3,
         )
+        return True
 
     # ------------------------------------------------------------------ #
     # Disk space management                                                #
@@ -1380,7 +1418,9 @@ class ReolinkDownloadCoordinator:
             {k: v for k, v in m.items() if k != "_channel_key"}
             for m in self._recording_meta.values()
         ]
-        return recording + list(self._pending_meta.values())
+        combined = recording + list(self._pending_meta.values())
+        combined.sort(key=lambda m: m.get("start_time") or "", reverse=True)
+        return combined
 
     def _mark_recording(
         self,
@@ -1427,6 +1467,25 @@ class ReolinkDownloadCoordinator:
     def _notify_sensors(self) -> None:
         """Push an update signal so sensors refresh their state."""
         async_dispatcher_send(self.hass, SIGNAL_UPDATE)
+
+    async def _cleanup_tmp_files(self) -> None:
+        """Remove any leftover .tmp files from interrupted downloads."""
+        def _scan_and_delete() -> list[str]:
+            removed = []
+            for root, _, files in os.walk(MEDIA_BASE_DIR):
+                for name in files:
+                    if name.endswith(".tmp"):
+                        path = os.path.join(root, name)
+                        try:
+                            os.remove(path)
+                            removed.append(path)
+                        except Exception as err:
+                            LOGGER.debug("Could not remove tmp file %s: %s", path, err)
+            return removed
+
+        removed = await self.hass.async_add_executor_job(_scan_and_delete)
+        for path in removed:
+            LOGGER.info("Removed leftover tmp file: %s", os.path.basename(path))
 
     async def _remove_tmp(self, tmp_path: str) -> None:
         """Remove a temp file if it exists, ignoring errors."""

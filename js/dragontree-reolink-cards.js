@@ -512,6 +512,10 @@ const TEMPLATE = `
             <span class="fg-label">Tags</span>
             <div class="checkbox-group" id="tagChecks"></div>
           </div>
+          <div>
+            <span class="fg-label">Options</span>
+            <div class="checkbox-group" id="optionChecks"></div>
+          </div>
         </div>
       </div>
 
@@ -540,6 +544,7 @@ class DragontreeReolinkPlayback extends HTMLElement {
     this._filters = this._defaultFilters();
     this._thumbCache = new Map(); // content_id → resolved URL
     this._unsubRecordingEvents = null;
+    this._pendingPollTimer = null;
     this._hasMore = true;
     this._loadingMore = false;
     this._totalRecEntityId = null;  // sensor.dragontree_reolink_total_recordings
@@ -603,7 +608,7 @@ class DragontreeReolinkPlayback extends HTMLElement {
   _updateFilterIcon() {
     const icon = this.shadowRoot && this.shadowRoot.getElementById('filterIcon');
     if (!icon) return;
-    const active = this._filters.cameras.length > 0 || this._filters.triggers.length > 0;
+    const active = this._filters.cameras.length > 0 || this._filters.triggers.length > 0 || this._filters.hidePending;
     icon.setAttribute('icon', active ? 'mdi:filter' : 'mdi:filter-off');
     icon.classList.toggle('filters-active', active);
   }
@@ -615,11 +620,20 @@ class DragontreeReolinkPlayback extends HTMLElement {
     this._loadRecordings().then(() => this._renderList());
   }
 
+  connectedCallback() {
+    if (this._initialized) {
+      this._subscribeRecordingEvents();
+      this._pollPending();
+    }
+  }
+
   disconnectedCallback() {
     if (this._unsubRecordingEvents) {
       this._unsubRecordingEvents();
       this._unsubRecordingEvents = null;
     }
+    clearInterval(this._pendingPollTimer);
+    this._pendingPollTimer = null;
   }
 
   // ── Lovelace lifecycle ────────────────────────────────────────────────────
@@ -696,6 +710,7 @@ class DragontreeReolinkPlayback extends HTMLElement {
     return {
       cameras: [],    // empty = all cameras
       triggers: [],   // empty = no tag filter
+      hidePending: false,
     };
   }
 
@@ -712,6 +727,27 @@ class DragontreeReolinkPlayback extends HTMLElement {
     }).catch(err => {
       console.warn('[reolink] Event subscription failed, relying on state fallback:', err);
     });
+
+    if (!this._pendingPollTimer) {
+      this._pendingPollTimer = setInterval(() => this._pollPending(), 8000);
+    }
+  }
+
+  async _pollPending() {
+    if (!this._hass) return;
+    try {
+      const result = await this._hass.callWS({ type: 'dragontree_reolink/get_pending' });
+      const fresh = result.pending || [];
+      const changed =
+        fresh.length !== this._pending.length ||
+        fresh.some((r, i) => r.path !== (this._pending[i] || {}).path || r.status !== (this._pending[i] || {}).status);
+      if (changed) {
+        this._pending = fresh;
+        this._renderList();
+      }
+    } catch (err) {
+      console.warn('[reolink] _pollPending failed:', err);
+    }
   }
 
   async _refreshRecordings() {
@@ -817,7 +853,7 @@ class DragontreeReolinkPlayback extends HTMLElement {
     });
 
     sr.getElementById('filterIcon').addEventListener('click', (e) => {
-      const active = this._filters.cameras.length > 0 || this._filters.triggers.length > 0;
+      const active = this._filters.cameras.length > 0 || this._filters.triggers.length > 0 || this._filters.hidePending;
       if (active) {
         e.stopPropagation();
         this._clearFilters();
@@ -875,6 +911,16 @@ class DragontreeReolinkPlayback extends HTMLElement {
       </label>
     `).join('');
 
+    // Option checkboxes
+    const optionChecks = sr.getElementById('optionChecks');
+    optionChecks.innerHTML = `
+      <label class="cb-item">
+        <input type="checkbox" name="option" value="hidePending"
+               ${this._filters.hidePending ? 'checked' : ''}>
+        Hide Pending
+      </label>
+    `;
+
     this._updateFilterIcon();
   }
 
@@ -884,6 +930,7 @@ class DragontreeReolinkPlayback extends HTMLElement {
     this._filters = {
       cameras: Array.from(sr.querySelectorAll('input[name="camera"]:checked')).map(el => el.value),
       triggers: Array.from(sr.querySelectorAll('input[name="trigger"]:checked')).map(el => el.value),
+      hidePending: !!sr.querySelector('input[name="option"][value="hidePending"]')?.checked,
     };
 
     this._saveFilters();
@@ -940,13 +987,14 @@ class DragontreeReolinkPlayback extends HTMLElement {
     const listPanel = this.shadowRoot.getElementById('listPanel');
     if (!listPanel) return;
 
-    if (!this._recordings.length && !this._pending.length) {
+    const visiblePending = this._filters.hidePending ? [] : this._pending;
+    if (!this._recordings.length && !visiblePending.length) {
       listPanel.innerHTML = '<div class="list-msg">No recordings found</div>';
       this._updateNavButtons();
       return;
     }
 
-    const pendingHtml = this._pending.map(rec => this._pendingItemHTML(rec)).join('');
+    const pendingHtml = visiblePending.map(rec => this._pendingItemHTML(rec)).join('');
     listPanel.innerHTML = pendingHtml + this._recordings.map((rec, i) => this._recItemHTML(rec, i)).join('');
 
     listPanel.querySelectorAll('.rec-item').forEach(item => {

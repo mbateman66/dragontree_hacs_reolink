@@ -35,6 +35,7 @@ def _path_to_content_id(path: str) -> str:
 def async_register_ws_commands(hass: HomeAssistant) -> None:
     """Register WebSocket API commands (idempotent)."""
     websocket_api.async_register_command(hass, ws_get_recordings)
+    websocket_api.async_register_command(hass, ws_get_pending)
     websocket_api.async_register_command(hass, ws_get_cameras)
     websocket_api.async_register_command(hass, ws_get_cameras_config)
     websocket_api.async_register_command(hass, ws_set_camera_in_schedule)
@@ -93,6 +94,21 @@ async def ws_get_recordings(
     pending = runtime_data.coordinator.get_pending_recordings()
 
     connection.send_result(msg["id"], {"recordings": rows, "pending": pending})
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/get_pending"})
+@websocket_api.async_response
+async def ws_get_pending(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """Return only pending (recording/queued/downloading) items. No DB query."""
+    runtime_data: DragontreeReolinkData | None = hass.data.get(DOMAIN)
+    if runtime_data is None:
+        connection.send_error(msg["id"], "not_ready", "Coordinator not available")
+        return
+    connection.send_result(msg["id"], {"pending": runtime_data.coordinator.get_pending_recordings()})
 
 
 @websocket_api.websocket_command(
