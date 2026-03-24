@@ -1927,6 +1927,22 @@ const LIVE_STYLE = PLAYER_STYLE + `
   }
   .cam-icon.live { color: var(--primary-color, #03a9f4); }
 
+  /* PTZ d-pad */
+  .ptz-pad {
+    display: grid;
+    grid-template-columns: repeat(3, 28px);
+    grid-template-rows: repeat(3, 28px);
+    gap: 2px;
+  }
+  .ptz-btn {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
   /* Live-specific button states */
   .ctrl-btn.live {
     background: var(--primary-color, #03a9f4);
@@ -1977,6 +1993,22 @@ const LIVE_TEMPLATE = `
           <button class="ctrl-btn icon-only" id="btnFullscreen" disabled>
             <ha-icon icon="mdi:fullscreen" style="--mdc-icon-size:18px"></ha-icon>
           </button>
+        </div>
+        <div class="controls-row" id="ptzRow" style="display:none">
+          <div class="ptz-pad">
+            <button class="ctrl-btn ptz-btn" data-dir="up" title="Pan up" style="grid-area:1/2">
+              <ha-icon icon="mdi:arrow-up" style="--mdc-icon-size:14px"></ha-icon>
+            </button>
+            <button class="ctrl-btn ptz-btn" data-dir="left" title="Pan left" style="grid-area:2/1">
+              <ha-icon icon="mdi:arrow-left" style="--mdc-icon-size:14px"></ha-icon>
+            </button>
+            <button class="ctrl-btn ptz-btn" data-dir="right" title="Pan right" style="grid-area:2/3">
+              <ha-icon icon="mdi:arrow-right" style="--mdc-icon-size:14px"></ha-icon>
+            </button>
+            <button class="ctrl-btn ptz-btn" data-dir="down" title="Pan down" style="grid-area:3/2">
+              <ha-icon icon="mdi:arrow-down" style="--mdc-icon-size:14px"></ha-icon>
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -2100,6 +2132,33 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     // PlayerMixin shared button bindings (mute + fullscreen)
     this._bindPlayerButtons();
 
+    // PTZ — single delegated listener on the pad; reads current camera on each event
+    const ptzRow = sr.getElementById('ptzRow');
+    ptzRow.addEventListener('pointerdown', async (e) => {
+      const btn = e.target.closest('.ptz-btn');
+      if (!btn) return;
+      e.preventDefault();
+      btn.setPointerCapture(e.pointerId);
+      const entityId = this._selectedCamera?.ptz_entity_ids?.[btn.dataset.dir];
+      if (!entityId) return;
+      try {
+        await this._hass.callService('button', 'press', { entity_id: entityId });
+      } catch (err) {
+        console.error('[reolink-live] PTZ press failed:', err);
+      }
+    });
+    const _ptzStop = async () => {
+      const stopId = this._selectedCamera?.ptz_entity_ids?.stop;
+      if (!stopId) return;
+      try {
+        await this._hass.callService('button', 'press', { entity_id: stopId });
+      } catch (err) {
+        console.error('[reolink-live] PTZ stop failed:', err);
+      }
+    };
+    ptzRow.addEventListener('pointerup', (e) => { if (e.target.closest('.ptz-btn')) _ptzStop(); });
+    ptzRow.addEventListener('pointercancel', (e) => { if (e.target.closest('.ptz-btn')) _ptzStop(); });
+
     sr.getElementById('btnRecord').addEventListener('click', async () => {
       if (!this._selectedCamera?.record_entity_id) return;
       const entityId = this._selectedCamera.record_entity_id;
@@ -2133,8 +2192,15 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     this._fetchRecordTimers(); // pick up any active timer for this camera
     this._renderCameraList();
     this._updateRecordButton();
+    this._updatePtzControls();
 
     this._startLive();
+  }
+
+  _updatePtzControls() {
+    const ptzRow = this.shadowRoot.getElementById('ptzRow');
+    if (!ptzRow) return;
+    ptzRow.style.display = this._selectedCamera?.ptz_entity_ids ? '' : 'none';
   }
 
   // ── Live view ─────────────────────────────────────────────────────────────

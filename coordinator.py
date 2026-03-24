@@ -1086,6 +1086,20 @@ class ReolinkDownloadCoordinator:
 
         return result
 
+    def _find_ptz_entities(self) -> dict[str, dict[str, str]]:
+        """Return {camera_name: {direction: entity_id}} for cameras with PTZ button entities."""
+        directions = ("up", "down", "left", "right", "stop")
+        per_dir = {
+            d: self._find_cam_entities_by_suffix(f"_ptz_{d}", "button")
+            for d in directions
+        }
+        result: dict[str, dict[str, str]] = {}
+        for cam_name in self._collect_cam_slugs().values():
+            entities = {d: per_dir[d][cam_name] for d in directions if cam_name in per_dir[d]}
+            if entities:
+                result[cam_name] = entities
+        return result
+
     def _find_pir_entities(self) -> dict[str, str]:
         """Return {camera_name: pir_entity_id} for all Reolink cameras.
 
@@ -1156,6 +1170,7 @@ class ReolinkDownloadCoordinator:
         sens_entities = self._find_cam_entities_by_suffix("_pir_sensitivity", "number")
         record_entities = self._find_cam_entities_by_suffix("_manual_record", "switch")
         camera_entities = self._find_camera_entities()
+        ptz_entities = self._find_ptz_entities()
         cameras_cfg = self._schedule.get("cameras", {})
         cam_slugs = self._collect_cam_slugs()
         result = []
@@ -1196,6 +1211,7 @@ class ReolinkDownloadCoordinator:
                 "sensitivity_entity_id": sens_entity_id,
                 "record_entity_id": record_entities.get(cam_name),
                 "camera_entity_id": camera_entities.get(cam_name),
+                "ptz_entity_ids": ptz_entities.get(cam_name),
                 "in_schedule": in_schedule,
                 "enabled": _bool_state(state),
                 "rfa_enabled": _bool_state(rfa_state),
