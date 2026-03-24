@@ -4,6 +4,17 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.5.0] - 2026-03-24
+
+### Added
+- PTZ pan/tilt controls in live view. Cameras with `_ptz_[up|down|left|right|stop]`
+  button entities show a d-pad in the controls bar. Pressing a direction fires the
+  corresponding button entity; releasing fires the stop entity. Supports mouse and touch.
+- Non-PIR cameras (e.g. cameras without a motion sensor) now appear in the config
+  and live views. Online status falls back to the `_manual_record` switch entity.
+  Schedule and PIR toggles are disabled for cameras without a PIR sensor.
+- Hide Pending filter option in the playback view Filters panel.
+
 ## [1.3.8] - 2026-03-14
 
 ### Added
