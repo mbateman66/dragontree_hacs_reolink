@@ -1938,6 +1938,7 @@ const LIVE_STYLE = PLAYER_STYLE + `
     width: 28px;
     height: 28px;
     padding: 0;
+    justify-content: center;
     touch-action: none;
     -webkit-user-select: none;
     user-select: none;
