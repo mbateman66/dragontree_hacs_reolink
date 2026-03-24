@@ -1995,7 +1995,7 @@ const LIVE_TEMPLATE = `
             <ha-icon icon="mdi:fullscreen" style="--mdc-icon-size:18px"></ha-icon>
           </button>
         </div>
-        <div class="controls-row" id="ptzRow" style="display:none">
+        <div class="controls-row" id="ptzRow" style="display:none; justify-content:center">
           <div class="ptz-pad">
             <button class="ctrl-btn ptz-btn" data-dir="up" title="Pan up" style="grid-area:1/2">
               <ha-icon icon="mdi:arrow-up" style="--mdc-icon-size:14px"></ha-icon>
@@ -2201,7 +2201,7 @@ class DragontreeReolinkLiveCard extends HTMLElement {
   _updatePtzControls() {
     const ptzRow = this.shadowRoot.getElementById('ptzRow');
     if (!ptzRow) return;
-    ptzRow.style.display = this._selectedCamera?.ptz_entity_ids ? '' : 'none';
+    ptzRow.style.display = this._selectedCamera?.ptz_entity_ids ? 'flex' : 'none';
   }
 
   // ── Live view ─────────────────────────────────────────────────────────────
