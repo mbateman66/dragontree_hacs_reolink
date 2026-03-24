@@ -1496,7 +1496,7 @@ class DragontreeReolinkCamerasCard extends HTMLElement {
           <span class="cam-name">${this._escHtml(cam.name)}${offline ? '<span class="offline-badge">Offline</span>' : ''}</span>
           <div class="cell-center">
             <ha-switch class="pir-toggle"
-              data-entity="${this._escAttr(cam.pir_entity_id)}"
+              data-entity="${this._escAttr(cam.pir_entity_id || '')}"
               title="Enable / disable PIR detection"></ha-switch>
           </div>
           <div class="cell-center">
@@ -1537,7 +1537,7 @@ class DragontreeReolinkCamerasCard extends HTMLElement {
       if (rfaSw) { rfaSw.checked = rfaState ? rfaState.state === 'on' : false; rfaSw.disabled = !rfaState || !cam.rfa_entity_id || offline; }
 
       const schedSw = row.querySelector('.schedule-toggle');
-      if (schedSw) { schedSw.checked = !!cam.in_schedule; schedSw.disabled = offline; }
+      if (schedSw) { schedSw.checked = !!cam.in_schedule; schedSw.disabled = offline || !cam.pir_entity_id; }
     });
 
     // PIR enable/disable

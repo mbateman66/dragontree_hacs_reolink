@@ -1157,9 +1157,23 @@ class ReolinkDownloadCoordinator:
         record_entities = self._find_cam_entities_by_suffix("_manual_record", "switch")
         camera_entities = self._find_camera_entities()
         cameras_cfg = self._schedule.get("cameras", {})
+        cam_slugs = self._collect_cam_slugs()
         result = []
-        for cam_name, pir_entity_id in pir_entities.items():
-            state = self.hass.states.get(pir_entity_id)
+
+        def _bool_state(s):
+            return s.state == "on" if (s and s.state not in ("unavailable", "unknown")) else None
+
+        def _float_state(s):
+            if not s or s.state in ("unavailable", "unknown"):
+                return None
+            try:
+                return float(s.state)
+            except (ValueError, TypeError):
+                return None
+
+        for cam_name in cam_slugs.values():
+            pir_entity_id = pir_entities.get(cam_name)
+            state = self.hass.states.get(pir_entity_id) if pir_entity_id else None
             in_schedule = cameras_cfg.get(cam_name, {}).get("in_schedule", False)
 
             rfa_entity_id = rfa_entities.get(cam_name)
@@ -1168,19 +1182,11 @@ class ReolinkDownloadCoordinator:
             sens_entity_id = sens_entities.get(cam_name)
             sens_state = self.hass.states.get(sens_entity_id) if sens_entity_id else None
 
-            # A camera is offline when its PIR entity is unavailable (camera unreachable)
-            online = state is not None and state.state not in ("unavailable", "unknown")
-
-            def _bool_state(s):
-                return s.state == "on" if (s and s.state not in ("unavailable", "unknown")) else None
-
-            def _float_state(s):
-                if not s or s.state in ("unavailable", "unknown"):
-                    return None
-                try:
-                    return float(s.state)
-                except (ValueError, TypeError):
-                    return None
+            # Use PIR entity to determine online status when available.
+            # For cameras without PIR, fall back to the manual_record switch.
+            status_entity_id = pir_entity_id or record_entities.get(cam_name)
+            status_state = self.hass.states.get(status_entity_id) if status_entity_id else None
+            online = status_state is not None and status_state.state not in ("unavailable", "unknown")
 
             result.append({
                 "name": cam_name,
