@@ -4,6 +4,15 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.5.1] - 2026-04-18
+
+### Fixed
+- Fullscreen button in the live view was permanently disabled. `Object.assign` was
+  overwriting the live card's `_updateFullscreenButton` and `_updateMuteButton`
+  overrides with the base PlayerMixin versions, which don't manage the `disabled`
+  state. Replaced `Object.assign` with a selective copy that preserves methods
+  already defined on the class prototype.
+
 ## [1.5.0] - 2026-03-24
 
 ### Added

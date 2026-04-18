@@ -2543,7 +2543,11 @@ class DragontreeReolinkLiveCard extends HTMLElement {
   }
 }
 
-// Mix in shared player methods (own methods defined above override the mixin)
-Object.assign(DragontreeReolinkLiveCard.prototype, PlayerMixin);
+// Mix in shared player methods — only add mixin entries not already defined on the class
+for (const key of Object.keys(PlayerMixin)) {
+  if (!Object.prototype.hasOwnProperty.call(DragontreeReolinkLiveCard.prototype, key)) {
+    DragontreeReolinkLiveCard.prototype[key] = PlayerMixin[key];
+  }
+}
 
 customElements.define('dragontree-reolink-live', DragontreeReolinkLiveCard);
