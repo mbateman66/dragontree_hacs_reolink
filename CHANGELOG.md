@@ -4,6 +4,15 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.5.2] - 2026-05-18
+
+### Fixed
+- Stale "RECORDING" entry persisting in the playback list after a HA reboot.
+  During startup catchup, in-progress recordings were added to `_recording_meta`
+  without a `_channel_key`, so the polling loop's per-channel cleanup logic could
+  never clear them. Fixed by passing the channel key to `_maybe_enqueue` during
+  startup catchup, matching the behaviour of the regular polling path.
+
 ## [1.5.1] - 2026-04-18
 
 ### Fixed

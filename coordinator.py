@@ -495,7 +495,8 @@ class ReolinkDownloadCoordinator:
                             vod_start = vod_file.start_time.replace(tzinfo=None)
                             if vod_start >= catchup_from:
                                 await self._maybe_enqueue(
-                                    host, channel, config_entry.entry_id, vod_file
+                                    host, channel, config_entry.entry_id, vod_file,
+                                    channel_key=f"{config_entry.entry_id}_{channel}",
                                 )
 
     async def _queue_initial_downloads(self) -> None:
