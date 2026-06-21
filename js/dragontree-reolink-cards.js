@@ -1152,11 +1152,13 @@ class DragontreeReolinkPlayback extends HTMLElement {
     const prev = sr.getElementById('btnPrev');
     const next = sr.getElementById('btnNext');
     const fs = sr.getElementById('btnFullscreen');
+    const dl = sr.getElementById('btnDownload');
     const seek = sr.getElementById('seekBar');
     const hasContent = this._selectedIndex >= 0;
     if (prev) prev.disabled = this._olderIndex() === -1;
     if (next) next.disabled = this._newerIndex() === -1;
     if (fs) fs.disabled = !hasContent;
+    if (dl) dl.disabled = !hasContent;
     if (seek) seek.disabled = !hasContent;
     if (!hasContent) {
       this._updatePlayPauseButton();
