@@ -4,6 +4,11 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.5.3] - 2026-06-21
+
+### Changed
+- Increased spacing between the scrubber and playback buttons in the controls bar.
+
 ## [1.5.2] - 2026-05-18
 
 ### Fixed

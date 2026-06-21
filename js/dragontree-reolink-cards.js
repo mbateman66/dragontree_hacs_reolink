@@ -124,7 +124,7 @@ const PLAYER_STYLE = `
     padding: 8px 12px;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 18px;
   }
 
   .controls-row {
