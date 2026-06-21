@@ -883,6 +883,8 @@ class DragontreeReolinkPlayback extends HTMLElement {
       if (i !== -1) this._selectRecording(i);
     });
 
+    sr.getElementById('btnDownload').addEventListener('click', () => this._downloadCurrent());
+
     // PlayerMixin shared button bindings (mute + fullscreen)
     this._bindPlayerButtons();
   }
@@ -1120,6 +1122,30 @@ class DragontreeReolinkPlayback extends HTMLElement {
     });
     this._updateMuteButton();
     this._updatePlayPauseButton();
+  }
+
+  _downloadCurrent() {
+    if (!this._currentUrl) return;
+    const rec = this._recordings[this._selectedIndex];
+    if (!rec) return;
+    const url = this._currentUrl.startsWith('/')
+      ? window.location.origin + this._currentUrl
+      : this._currentUrl;
+    const camera = rec.camera.replace(/[\s/]+/g, '_');
+    const d = new Date(rec.start_time);
+    const pad = n => String(n).padStart(2, '0');
+    const ts = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}_${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}`;
+    const filename = `${camera}_${ts}.mp4`;
+    if (navigator.share) {
+      navigator.share({ url, title: filename }).catch(e => {
+        if (e.name !== 'AbortError') console.error('[reolink] share failed', e);
+      });
+    } else {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+    }
   }
 
   _updatePlayPauseButton() {
