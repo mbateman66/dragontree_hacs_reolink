@@ -1053,6 +1053,7 @@ class DragontreeReolinkPlayback extends HTMLElement {
 
   async _selectRecording(index) {
     this._selectedIndex = index;
+    this._currentUrl = null;
     const rec = this._recordings[index];
     if (!rec) return;
 
@@ -1083,6 +1084,7 @@ class DragontreeReolinkPlayback extends HTMLElement {
   }
 
   _playUrl(url) {
+    this._currentUrl = url;
     const videoArea = this.shadowRoot.getElementById('videoArea');
     if (!videoArea) return;
     videoArea.innerHTML = `<video autoplay playsinline src="${url}"></video>`;
