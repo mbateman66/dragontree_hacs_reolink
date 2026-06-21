@@ -484,6 +484,9 @@ const TEMPLATE = `
           <button class="ctrl-btn" id="btnNext" disabled>Next &#9654;</button>
           <span class="timer" id="timeDisplay">--:-- / --:--</span>
           <div class="ctrl-spacer"></div>
+          <button class="ctrl-btn icon-only" id="btnDownload" disabled>
+            <ha-icon icon="mdi:download" style="--mdc-icon-size:18px"></ha-icon>
+          </button>
           <button class="ctrl-btn icon-only" id="btnMute">
             <ha-icon icon="mdi:volume-high" style="--mdc-icon-size:18px"></ha-icon>
           </button>
@@ -543,6 +546,7 @@ class DragontreeReolinkPlayback extends HTMLElement {
     this._initialized = false;
     this._filters = this._defaultFilters();
     this._thumbCache = new Map(); // content_id → resolved URL
+    this._currentUrl = null;
     this._unsubRecordingEvents = null;
     this._pendingPollTimer = null;
     this._hasMore = true;
