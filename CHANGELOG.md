@@ -4,6 +4,11 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.6.0] - 2026-06-21
+
+### Added
+- Download/share button in the playback controls bar (left of the mute button). On iOS and macOS Safari, tapping the button opens the native share sheet (allowing Save to Files or Save Video). On Chrome, Firefox, and Edge, it triggers a direct file download. The filename is derived from the camera name and recording timestamp (e.g. `Backyard_2026-06-21_14-32-05.mp4`).
+
 ## [1.5.3] - 2026-06-21
 
 ### Changed
