@@ -87,6 +87,7 @@ const PLAYER_STYLE = `
     min-height: 0;
     position: relative;
     background: #000;
+    overflow: hidden;
   }
 
   /* Any direct child of video-area fills it absolutely */
@@ -241,6 +242,10 @@ const PlayerMixin = {
     this._fakeFullscreen = false;
     const s = localStorage.getItem('dragontree_reolink_muted');
     this._muted = s === null ? true : s === 'true';
+    this._pinch = { scale: 1, tx: 0, ty: 0 };
+    this._lastTap = 0;
+    this._pinchGesture = null;
+    this._panStart = null;
   },
   _bindPlayerButtons() {
     const sr = this.shadowRoot;
@@ -286,6 +291,30 @@ const PlayerMixin = {
     if (!btn) return;
     const isFs = !!document.fullscreenElement || this._fakeFullscreen;
     btn.innerHTML = `<ha-icon icon="${isFs ? 'mdi:fullscreen-exit' : 'mdi:fullscreen'}" style="--mdc-icon-size:18px"></ha-icon>`;
+  },
+  _clampTranslate(tx, ty, scale, w, h) {
+    return {
+      tx: Math.max(-(scale - 1) * w, Math.min(0, tx)),
+      ty: Math.max(-(scale - 1) * h, Math.min(0, ty)),
+    };
+  },
+  _applyZoom() {
+    const videoArea = this.shadowRoot.getElementById('videoArea');
+    if (!videoArea) return;
+    const target = videoArea.querySelector('video, ha-camera-stream');
+    if (!target) return;
+    const { scale, tx, ty } = this._pinch;
+    target.style.transformOrigin = '0 0';
+    target.style.transform = scale === 1 ? '' : `translate(${tx}px, ${ty}px) scale(${scale})`;
+  },
+  _resetZoom() {
+    this._pinch = { scale: 1, tx: 0, ty: 0 };
+    this._pinchGesture = null;
+    this._panStart = null;
+    const videoArea = this.shadowRoot.getElementById('videoArea');
+    if (!videoArea) return;
+    const target = videoArea.querySelector('video, ha-camera-stream');
+    if (target) target.style.transform = '';
   },
   _escHtml(str) {
     return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
