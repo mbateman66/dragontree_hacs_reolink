@@ -251,7 +251,11 @@ const PlayerMixin = {
     const sr = this.shadowRoot;
     sr.getElementById('btnMute').addEventListener('click', () => this._toggleMute());
     sr.getElementById('btnFullscreen').addEventListener('click', () => this._toggleFullscreen());
-    sr.getElementById('playerPanel').addEventListener('fullscreenchange', () => this._updateFullscreenButton());
+    sr.getElementById('playerPanel').addEventListener('fullscreenchange', () => {
+      this._updateFullscreenButton();
+      if (!document.fullscreenElement) this._resetZoom();
+    });
+    this._initPinchZoom();
   },
   _toggleMute() {
     this._muted = !this._muted;
@@ -273,6 +277,7 @@ const PlayerMixin = {
         this._fakeFullscreen = false;
         panel.classList.remove('fake-fullscreen');
         this._updateFullscreenButton();
+        this._resetZoom();
       }
     } else if (panel.requestFullscreen) {
       panel.requestFullscreen().catch(() => {
@@ -315,6 +320,79 @@ const PlayerMixin = {
     if (!videoArea) return;
     const target = videoArea.querySelector('video, ha-camera-stream');
     if (target) target.style.transform = '';
+  },
+  _initPinchZoom() {
+    const videoArea = this.shadowRoot.getElementById('videoArea');
+    if (!videoArea) return;
+
+    videoArea.addEventListener('touchstart', (e) => {
+      const rect = videoArea.getBoundingClientRect();
+      if (e.touches.length === 2) {
+        const t1 = e.touches[0], t2 = e.touches[1];
+        const startDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+        const midX = (t1.clientX + t2.clientX) / 2 - rect.left;
+        const midY = (t1.clientY + t2.clientY) / 2 - rect.top;
+        const { scale, tx, ty } = this._pinch;
+        this._panStart = null;
+        this._pinchGesture = {
+          startDist,
+          startScale: scale,
+          focalX: scale > 0 ? (midX - tx) / scale : midX,
+          focalY: scale > 0 ? (midY - ty) / scale : midY,
+        };
+      } else if (e.touches.length === 1) {
+        const touch = e.touches[0];
+        const now = Date.now();
+        if (now - this._lastTap < 300) {
+          this._resetZoom();
+        }
+        this._lastTap = now;
+        if (this._pinch.scale > 1) {
+          this._panStart = {
+            x: touch.clientX - rect.left,
+            y: touch.clientY - rect.top,
+            tx: this._pinch.tx,
+            ty: this._pinch.ty,
+          };
+        }
+      }
+    }, { passive: false });
+
+    videoArea.addEventListener('touchmove', (e) => {
+      const rect = videoArea.getBoundingClientRect();
+      if (e.touches.length === 2 && this._pinchGesture) {
+        e.preventDefault();
+        const t1 = e.touches[0], t2 = e.touches[1];
+        const newDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+        const midX = (t1.clientX + t2.clientX) / 2 - rect.left;
+        const midY = (t1.clientY + t2.clientY) / 2 - rect.top;
+        const { startDist, startScale, focalX, focalY } = this._pinchGesture;
+        const newScale = Math.max(1, Math.min(6, startScale * (newDist / startDist)));
+        const raw = this._clampTranslate(
+          midX - focalX * newScale,
+          midY - focalY * newScale,
+          newScale, rect.width, rect.height
+        );
+        this._pinch = { scale: newScale, tx: raw.tx, ty: raw.ty };
+        this._applyZoom();
+      } else if (e.touches.length === 1 && this._panStart) {
+        e.preventDefault();
+        const touch = e.touches[0];
+        const raw = this._clampTranslate(
+          this._panStart.tx + (touch.clientX - rect.left - this._panStart.x),
+          this._panStart.ty + (touch.clientY - rect.top  - this._panStart.y),
+          this._pinch.scale, rect.width, rect.height
+        );
+        this._pinch.tx = raw.tx;
+        this._pinch.ty = raw.ty;
+        this._applyZoom();
+      }
+    }, { passive: false });
+
+    videoArea.addEventListener('touchend', () => {
+      this._pinchGesture = null;
+      this._panStart = null;
+    }, { passive: true });
   },
   _escHtml(str) {
     return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -1105,6 +1183,7 @@ class DragontreeReolinkPlayback extends HTMLElement {
     } catch (e) {
       console.error('[reolink] Failed to resolve media URL for', rec.content_id, e);
       const videoArea = this.shadowRoot.getElementById('videoArea');
+      this._resetZoom();
       if (videoArea) videoArea.innerHTML = `<div class="no-selection">Could not load video</div>`;
     }
   }
@@ -1118,6 +1197,7 @@ class DragontreeReolinkPlayback extends HTMLElement {
     this._currentUrl = url;
     const videoArea = this.shadowRoot.getElementById('videoArea');
     if (!videoArea) return;
+    this._resetZoom();
     videoArea.innerHTML = `<video autoplay playsinline src="${url}"></video>`;
     const video = videoArea.querySelector('video');
     video.muted = this._muted;
@@ -2293,6 +2373,7 @@ class DragontreeReolinkLiveCard extends HTMLElement {
 
     const videoArea = this.shadowRoot.getElementById('videoArea');
     if (videoArea) {
+      this._resetZoom();
       videoArea.innerHTML = '';
       const streamEl = document.createElement('ha-camera-stream');
       streamEl.hass = this._hass;
@@ -2322,6 +2403,7 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     this._liveTimerInterval = null;
 
     const videoArea = this.shadowRoot.getElementById('videoArea');
+    this._resetZoom();
     if (videoArea) {
       if (this._selectedCamera) {
         videoArea.innerHTML = `
