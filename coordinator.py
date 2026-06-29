@@ -207,6 +207,10 @@ class ReolinkDownloadCoordinator:
         self._live_timeout_secs: int = 120
         self._record_timeout_secs: int = MANUAL_REC_TIMEOUT_SECS
 
+        # Download enable/disable (loaded from persistent store)
+        self._download_config_store: Store | None = None
+        self._download_enabled: bool = True
+
     # ------------------------------------------------------------------ #
     # Public properties (read by sensors)                                  #
     # ------------------------------------------------------------------ #
@@ -266,6 +270,11 @@ class ReolinkDownloadCoordinator:
         timer_cfg = await self._timer_config_store.async_load() or {}
         self._live_timeout_secs = timer_cfg.get("live_timeout_secs", 120)
         self._record_timeout_secs = timer_cfg.get("record_timeout_secs", MANUAL_REC_TIMEOUT_SECS)
+
+        # Load download enabled/disabled setting
+        self._download_config_store = Store(self.hass, 1, f"{DOMAIN}_download_config")
+        dl_cfg = await self._download_config_store.async_load() or {}
+        self._download_enabled = dl_cfg.get("download_enabled", True)
 
         # Watch manual_record switches for server-side timer management
         self._setup_manual_rec_tracking()
@@ -584,6 +593,8 @@ class ReolinkDownloadCoordinator:
         channel_key: str | None = None,
     ) -> bool:
         """Enqueue a VOD file for download if not already tracked/queued/on disk."""
+        if not self._download_enabled:
+            return False
         is_hub = getattr(host.api, "is_hub", False)
         vod_type = _vod_type_for(vod_file.file_name, host.api.is_nvr, is_hub)
         if vod_type is None:
@@ -990,6 +1001,29 @@ class ReolinkDownloadCoordinator:
             "live_timeout_secs": live_timeout_secs,
             "record_timeout_secs": record_timeout_secs,
         })
+
+    def async_get_download_config(self) -> dict:
+        """Return the current download enabled/disabled setting."""
+        return {"download_enabled": self._download_enabled}
+
+    async def async_set_download_config(self, download_enabled: bool) -> None:
+        """Persist new download setting and drain queue if disabling."""
+        self._download_enabled = download_enabled
+        if not download_enabled:
+            drained = 0
+            while not self._queue.empty():
+                try:
+                    *_, file_path = self._queue.get_nowait()
+                    self._queue.task_done()
+                    self._queued_paths.discard(file_path)
+                    self._pending_meta.pop(file_path, None)
+                    drained += 1
+                except asyncio.QueueEmpty:
+                    break
+            if drained:
+                self._notify_sensors()
+                self.hass.bus.async_fire(EVENT_QUEUE_CHANGED)
+        await self._download_config_store.async_save({"download_enabled": download_enabled})
 
     # ------------------------------------------------------------------ #
     # Camera schedule                                                      #
