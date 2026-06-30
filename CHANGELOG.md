@@ -4,6 +4,20 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.7.0] - 2026-06-30
+
+### Added
+- Pinch-to-zoom and pan for the video player on touch devices, with double-tap to
+  reset. Works in both the playback and live views.
+- Mouse wheel zoom (toward the cursor) and click-drag pan for the video player on
+  desktop, with double-click to reset. Shares the same zoom/pan state as the touch
+  gestures above.
+- "Background Downloads" toggle on the Config tab to pause automatic video
+  downloads from the Reolink hub — useful for testing against a development HA
+  instance without pulling real footage. Re-enabling downloads queues only the
+  most recent 2 recordings per camera rather than backfilling everything missed
+  while disabled.
+
 ## [1.6.0] - 2026-06-21
 
 ### Added
