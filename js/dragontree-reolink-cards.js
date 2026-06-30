@@ -256,6 +256,7 @@ const PlayerMixin = {
       if (!document.fullscreenElement) this._resetZoom();
     });
     this._initPinchZoom();
+    this._initMouseZoom();
   },
   _toggleMute() {
     this._muted = !this._muted;
@@ -318,6 +319,7 @@ const PlayerMixin = {
     this._panStart = null;
     const videoArea = this.shadowRoot.getElementById('videoArea');
     if (!videoArea) return;
+    videoArea.style.cursor = '';
     const target = videoArea.querySelector('video, ha-camera-stream');
     if (target) target.style.transform = '';
   },
@@ -393,6 +395,63 @@ const PlayerMixin = {
       this._pinchGesture = null;
       this._panStart = null;
     }, { passive: true });
+  },
+  _initMouseZoom() {
+    const videoArea = this.shadowRoot.getElementById('videoArea');
+    if (!videoArea) return;
+
+    videoArea.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const rect = videoArea.getBoundingClientRect();
+      const cursorX = e.clientX - rect.left;
+      const cursorY = e.clientY - rect.top;
+      const { scale, tx, ty } = this._pinch;
+      const factor = e.deltaY < 0 ? (1 / 0.9) : 0.9;
+      const newScale = Math.max(1, Math.min(6, scale * factor));
+      const focalX = (cursorX - tx) / scale;
+      const focalY = (cursorY - ty) / scale;
+      const raw = this._clampTranslate(
+        cursorX - focalX * newScale,
+        cursorY - focalY * newScale,
+        newScale, rect.width, rect.height
+      );
+      this._pinch = { scale: newScale, tx: raw.tx, ty: raw.ty };
+      this._applyZoom();
+      videoArea.style.cursor = newScale > 1 ? 'grab' : '';
+    }, { passive: false });
+
+    videoArea.addEventListener('mousedown', (e) => {
+      if (this._pinch.scale <= 1) return;
+      const rect = videoArea.getBoundingClientRect();
+      this._panStart = {
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+        tx: this._pinch.tx,
+        ty: this._pinch.ty,
+      };
+      videoArea.style.cursor = 'grabbing';
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!this._panStart) return;
+      const rect = videoArea.getBoundingClientRect();
+      const raw = this._clampTranslate(
+        this._panStart.tx + (e.clientX - rect.left - this._panStart.x),
+        this._panStart.ty + (e.clientY - rect.top  - this._panStart.y),
+        this._pinch.scale, rect.width, rect.height
+      );
+      this._pinch.tx = raw.tx;
+      this._pinch.ty = raw.ty;
+      this._applyZoom();
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (!this._panStart) return;
+      this._panStart = null;
+      videoArea.style.cursor = this._pinch.scale > 1 ? 'grab' : '';
+    });
+
+    videoArea.addEventListener('dblclick', () => this._resetZoom());
   },
   _escHtml(str) {
     return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
