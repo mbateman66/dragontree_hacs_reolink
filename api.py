@@ -44,6 +44,8 @@ def async_register_ws_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_get_record_timers)
     websocket_api.async_register_command(hass, ws_get_timer_config)
     websocket_api.async_register_command(hass, ws_set_timer_config)
+    websocket_api.async_register_command(hass, ws_get_download_config)
+    websocket_api.async_register_command(hass, ws_set_download_config)
 
 
 @websocket_api.websocket_command(
@@ -278,4 +280,42 @@ async def ws_set_timer_config(
     await runtime_data.coordinator.async_set_timer_config(
         msg["live_timeout_secs"], msg["record_timeout_secs"]
     )
+    connection.send_result(msg["id"], {})
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): f"{DOMAIN}/get_download_config"}
+)
+@websocket_api.async_response
+async def ws_get_download_config(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """Return the current download enabled/disabled setting."""
+    runtime_data: DragontreeReolinkData | None = hass.data.get(DOMAIN)
+    if runtime_data is None:
+        connection.send_error(msg["id"], "not_ready", "Coordinator not available")
+        return
+    connection.send_result(msg["id"], runtime_data.coordinator.async_get_download_config())
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/set_download_config",
+        vol.Required("download_enabled"): bool,
+    }
+)
+@websocket_api.async_response
+async def ws_set_download_config(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """Enable or disable background video downloads."""
+    runtime_data: DragontreeReolinkData | None = hass.data.get(DOMAIN)
+    if runtime_data is None:
+        connection.send_error(msg["id"], "not_ready", "Coordinator not available")
+        return
+    await runtime_data.coordinator.async_set_download_config(msg["download_enabled"])
     connection.send_result(msg["id"], {})
