@@ -207,6 +207,10 @@ class ReolinkDownloadCoordinator:
         self._live_timeout_secs: int = 120
         self._record_timeout_secs: int = MANUAL_REC_TIMEOUT_SECS
 
+        # Download enable/disable (loaded from persistent store)
+        self._download_config_store: Store | None = None
+        self._download_enabled: bool = True
+
     # ------------------------------------------------------------------ #
     # Public properties (read by sensors)                                  #
     # ------------------------------------------------------------------ #
@@ -266,6 +270,11 @@ class ReolinkDownloadCoordinator:
         timer_cfg = await self._timer_config_store.async_load() or {}
         self._live_timeout_secs = timer_cfg.get("live_timeout_secs", 120)
         self._record_timeout_secs = timer_cfg.get("record_timeout_secs", MANUAL_REC_TIMEOUT_SECS)
+
+        # Load download enabled/disabled setting
+        self._download_config_store = Store(self.hass, 1, f"{DOMAIN}_download_config")
+        dl_cfg = await self._download_config_store.async_load() or {}
+        self._download_enabled = dl_cfg.get("download_enabled", True)
 
         # Watch manual_record switches for server-side timer management
         self._setup_manual_rec_tracking()
@@ -379,7 +388,14 @@ class ReolinkDownloadCoordinator:
         A POLL_LOOKBACK_BUFFER overlap is applied so recordings that the camera
         finishes writing after the previous poll window closes are not missed.
         Duplicate-checking in _maybe_enqueue ensures nothing is downloaded twice.
+
+        Skipped entirely while downloads are disabled: this leaves
+        ``_last_check`` untouched so that once downloads are re-enabled, the
+        next poll's lookback window naturally covers everything missed while
+        disabled, instead of having silently scrolled past it.
         """
+        if not self._download_enabled:
+            return
         config_entry = self.hass.config_entries.async_get_entry(entry_id)
         if config_entry is None:
             return
@@ -515,6 +531,28 @@ class ReolinkDownloadCoordinator:
                     count=INIT_RECORDINGS_PER_CAMERA,
                 )
 
+    async def _resume_recent_downloads(self) -> None:
+        """On re-enable, skip the historical backlog: queue only the most
+        recent INIT_RECORDINGS_PER_CAMERA recordings per camera (same as a
+        fresh install), and fast-forward the poll cursor so the next regular
+        poll doesn't also try to backfill the whole disabled gap.
+        """
+        for config_entry in self.hass.config_entries.async_loaded_entries(REOLINK_DOMAIN):
+            try:
+                host = config_entry.runtime_data.host
+            except AttributeError:
+                continue
+            for channel in host.api.channels:
+                if not self._channel_has_replay(host, channel):
+                    continue
+                key = f"{config_entry.entry_id}_{channel}"
+                now = self._camera_now(host)
+                self._last_check[key] = now
+                await self._db.upsert_last_check(key, now.isoformat())
+                await self._queue_recent(
+                    config_entry.entry_id, host, channel, count=INIT_RECORDINGS_PER_CAMERA
+                )
+
     async def _queue_recent(
         self, entry_id: str, host: Any, channel: int, count: int
     ) -> None:
@@ -584,6 +622,8 @@ class ReolinkDownloadCoordinator:
         channel_key: str | None = None,
     ) -> bool:
         """Enqueue a VOD file for download if not already tracked/queued/on disk."""
+        if not self._download_enabled:
+            return False
         is_hub = getattr(host.api, "is_hub", False)
         vod_type = _vod_type_for(vod_file.file_name, host.api.is_nvr, is_hub)
         if vod_type is None:
@@ -702,13 +742,21 @@ class ReolinkDownloadCoordinator:
                             os.path.basename(file_path), attempt,
                         )
                         await asyncio.sleep(DOWNLOAD_RETRY_DELAY_S)
-                        await self._queue.put((host, channel, entry_id, vod_file, file_path))
-                        self._queued_paths.add(file_path)
-                        self._pending_meta[file_path] = self._build_pending_meta(
-                            host, channel, vod_file, file_path, "queued"
-                        )
-                        self._notify_sensors()
-                        self.hass.bus.async_fire(EVENT_QUEUE_CHANGED)
+                        if self._download_enabled:
+                            await self._queue.put((host, channel, entry_id, vod_file, file_path))
+                            self._queued_paths.add(file_path)
+                            self._pending_meta[file_path] = self._build_pending_meta(
+                                host, channel, vod_file, file_path, "queued"
+                            )
+                            self._notify_sensors()
+                            self.hass.bus.async_fire(EVENT_QUEUE_CHANGED)
+                        else:
+                            _attempts.pop(file_path, None)
+                            LOGGER.info(
+                                "Downloads disabled — dropping %s after failure; "
+                                "poll will retry later",
+                                os.path.basename(file_path),
+                            )
                     else:
                         _attempts.pop(file_path, None)
                         LOGGER.warning(
@@ -990,6 +1038,32 @@ class ReolinkDownloadCoordinator:
             "live_timeout_secs": live_timeout_secs,
             "record_timeout_secs": record_timeout_secs,
         })
+
+    def async_get_download_config(self) -> dict:
+        """Return the current download enabled/disabled setting."""
+        return {"download_enabled": self._download_enabled}
+
+    async def async_set_download_config(self, download_enabled: bool) -> None:
+        """Persist new download setting and drain queue if disabling."""
+        was_enabled = self._download_enabled
+        self._download_enabled = download_enabled
+        if not download_enabled:
+            drained = 0
+            while not self._queue.empty():
+                try:
+                    *_, file_path = self._queue.get_nowait()
+                    self._queue.task_done()
+                    self._queued_paths.discard(file_path)
+                    self._pending_meta.pop(file_path, None)
+                    drained += 1
+                except asyncio.QueueEmpty:
+                    break
+            if drained:
+                self._notify_sensors()
+                self.hass.bus.async_fire(EVENT_QUEUE_CHANGED)
+        elif not was_enabled:
+            await self._resume_recent_downloads()
+        await self._download_config_store.async_save({"download_enabled": download_enabled})
 
     # ------------------------------------------------------------------ #
     # Camera schedule                                                      #

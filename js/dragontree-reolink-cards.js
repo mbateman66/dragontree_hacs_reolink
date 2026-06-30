@@ -87,6 +87,7 @@ const PLAYER_STYLE = `
     min-height: 0;
     position: relative;
     background: #000;
+    overflow: hidden;
   }
 
   /* Any direct child of video-area fills it absolutely */
@@ -241,12 +242,21 @@ const PlayerMixin = {
     this._fakeFullscreen = false;
     const s = localStorage.getItem('dragontree_reolink_muted');
     this._muted = s === null ? true : s === 'true';
+    this._pinch = { scale: 1, tx: 0, ty: 0 };
+    this._lastTap = 0;
+    this._pinchGesture = null;
+    this._panStart = null;
   },
   _bindPlayerButtons() {
     const sr = this.shadowRoot;
     sr.getElementById('btnMute').addEventListener('click', () => this._toggleMute());
     sr.getElementById('btnFullscreen').addEventListener('click', () => this._toggleFullscreen());
-    sr.getElementById('playerPanel').addEventListener('fullscreenchange', () => this._updateFullscreenButton());
+    sr.getElementById('playerPanel').addEventListener('fullscreenchange', () => {
+      this._updateFullscreenButton();
+      if (!document.fullscreenElement) this._resetZoom();
+    });
+    this._initPinchZoom();
+    this._initMouseZoom();
   },
   _toggleMute() {
     this._muted = !this._muted;
@@ -268,6 +278,7 @@ const PlayerMixin = {
         this._fakeFullscreen = false;
         panel.classList.remove('fake-fullscreen');
         this._updateFullscreenButton();
+        this._resetZoom();
       }
     } else if (panel.requestFullscreen) {
       panel.requestFullscreen().catch(() => {
@@ -286,6 +297,161 @@ const PlayerMixin = {
     if (!btn) return;
     const isFs = !!document.fullscreenElement || this._fakeFullscreen;
     btn.innerHTML = `<ha-icon icon="${isFs ? 'mdi:fullscreen-exit' : 'mdi:fullscreen'}" style="--mdc-icon-size:18px"></ha-icon>`;
+  },
+  _clampTranslate(tx, ty, scale, w, h) {
+    return {
+      tx: Math.max(-(scale - 1) * w, Math.min(0, tx)),
+      ty: Math.max(-(scale - 1) * h, Math.min(0, ty)),
+    };
+  },
+  _applyZoom() {
+    const videoArea = this.shadowRoot.getElementById('videoArea');
+    if (!videoArea) return;
+    const target = videoArea.querySelector('video, ha-camera-stream');
+    if (!target) return;
+    const { scale, tx, ty } = this._pinch;
+    target.style.transformOrigin = '0 0';
+    target.style.transform = scale === 1 ? '' : `translate(${tx}px, ${ty}px) scale(${scale})`;
+  },
+  _resetZoom() {
+    this._pinch = { scale: 1, tx: 0, ty: 0 };
+    this._pinchGesture = null;
+    this._panStart = null;
+    const videoArea = this.shadowRoot.getElementById('videoArea');
+    if (!videoArea) return;
+    videoArea.style.cursor = '';
+    const target = videoArea.querySelector('video, ha-camera-stream');
+    if (target) target.style.transform = '';
+  },
+  _initPinchZoom() {
+    const videoArea = this.shadowRoot.getElementById('videoArea');
+    if (!videoArea) return;
+
+    videoArea.addEventListener('touchstart', (e) => {
+      const rect = videoArea.getBoundingClientRect();
+      if (e.touches.length === 2) {
+        const t1 = e.touches[0], t2 = e.touches[1];
+        const startDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+        const midX = (t1.clientX + t2.clientX) / 2 - rect.left;
+        const midY = (t1.clientY + t2.clientY) / 2 - rect.top;
+        const { scale, tx, ty } = this._pinch;
+        this._panStart = null;
+        this._pinchGesture = {
+          startDist,
+          startScale: scale,
+          focalX: scale > 0 ? (midX - tx) / scale : midX,
+          focalY: scale > 0 ? (midY - ty) / scale : midY,
+        };
+      } else if (e.touches.length === 1) {
+        const touch = e.touches[0];
+        const now = Date.now();
+        if (now - this._lastTap < 300) {
+          this._resetZoom();
+        }
+        this._lastTap = now;
+        if (this._pinch.scale > 1) {
+          this._panStart = {
+            x: touch.clientX - rect.left,
+            y: touch.clientY - rect.top,
+            tx: this._pinch.tx,
+            ty: this._pinch.ty,
+          };
+        }
+      }
+    }, { passive: false });
+
+    videoArea.addEventListener('touchmove', (e) => {
+      const rect = videoArea.getBoundingClientRect();
+      if (e.touches.length === 2 && this._pinchGesture) {
+        e.preventDefault();
+        const t1 = e.touches[0], t2 = e.touches[1];
+        const newDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+        const midX = (t1.clientX + t2.clientX) / 2 - rect.left;
+        const midY = (t1.clientY + t2.clientY) / 2 - rect.top;
+        const { startDist, startScale, focalX, focalY } = this._pinchGesture;
+        const newScale = Math.max(1, Math.min(6, startScale * (newDist / startDist)));
+        const raw = this._clampTranslate(
+          midX - focalX * newScale,
+          midY - focalY * newScale,
+          newScale, rect.width, rect.height
+        );
+        this._pinch = { scale: newScale, tx: raw.tx, ty: raw.ty };
+        this._applyZoom();
+      } else if (e.touches.length === 1 && this._panStart) {
+        e.preventDefault();
+        const touch = e.touches[0];
+        const raw = this._clampTranslate(
+          this._panStart.tx + (touch.clientX - rect.left - this._panStart.x),
+          this._panStart.ty + (touch.clientY - rect.top  - this._panStart.y),
+          this._pinch.scale, rect.width, rect.height
+        );
+        this._pinch.tx = raw.tx;
+        this._pinch.ty = raw.ty;
+        this._applyZoom();
+      }
+    }, { passive: false });
+
+    videoArea.addEventListener('touchend', () => {
+      this._pinchGesture = null;
+      this._panStart = null;
+    }, { passive: true });
+  },
+  _initMouseZoom() {
+    const videoArea = this.shadowRoot.getElementById('videoArea');
+    if (!videoArea) return;
+
+    videoArea.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const rect = videoArea.getBoundingClientRect();
+      const cursorX = e.clientX - rect.left;
+      const cursorY = e.clientY - rect.top;
+      const { scale, tx, ty } = this._pinch;
+      const factor = e.deltaY < 0 ? (1 / 0.9) : 0.9;
+      const newScale = Math.max(1, Math.min(6, scale * factor));
+      const focalX = (cursorX - tx) / scale;
+      const focalY = (cursorY - ty) / scale;
+      const raw = this._clampTranslate(
+        cursorX - focalX * newScale,
+        cursorY - focalY * newScale,
+        newScale, rect.width, rect.height
+      );
+      this._pinch = { scale: newScale, tx: raw.tx, ty: raw.ty };
+      this._applyZoom();
+      videoArea.style.cursor = newScale > 1 ? 'grab' : '';
+    }, { passive: false });
+
+    videoArea.addEventListener('mousedown', (e) => {
+      if (this._pinch.scale <= 1) return;
+      const rect = videoArea.getBoundingClientRect();
+      this._panStart = {
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+        tx: this._pinch.tx,
+        ty: this._pinch.ty,
+      };
+      videoArea.style.cursor = 'grabbing';
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!this._panStart) return;
+      const rect = videoArea.getBoundingClientRect();
+      const raw = this._clampTranslate(
+        this._panStart.tx + (e.clientX - rect.left - this._panStart.x),
+        this._panStart.ty + (e.clientY - rect.top  - this._panStart.y),
+        this._pinch.scale, rect.width, rect.height
+      );
+      this._pinch.tx = raw.tx;
+      this._pinch.ty = raw.ty;
+      this._applyZoom();
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (!this._panStart) return;
+      this._panStart = null;
+      videoArea.style.cursor = this._pinch.scale > 1 ? 'grab' : '';
+    });
+
+    videoArea.addEventListener('dblclick', () => this._resetZoom());
   },
   _escHtml(str) {
     return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -1076,6 +1242,7 @@ class DragontreeReolinkPlayback extends HTMLElement {
     } catch (e) {
       console.error('[reolink] Failed to resolve media URL for', rec.content_id, e);
       const videoArea = this.shadowRoot.getElementById('videoArea');
+      this._resetZoom();
       if (videoArea) videoArea.innerHTML = `<div class="no-selection">Could not load video</div>`;
     }
   }
@@ -1089,6 +1256,7 @@ class DragontreeReolinkPlayback extends HTMLElement {
     this._currentUrl = url;
     const videoArea = this.shadowRoot.getElementById('videoArea');
     if (!videoArea) return;
+    this._resetZoom();
     videoArea.innerHTML = `<video autoplay playsinline src="${url}"></video>`;
     const video = videoArea.querySelector('video');
     video.muted = this._muted;
@@ -1753,6 +1921,20 @@ const TIMERS_STYLE = `
     color: var(--secondary-text-color, #888);
     border-top: 1px solid var(--divider-color, #e0e0e0);
   }
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    min-height: 52px;
+  }
+  .toggle-label { font-size: 1rem; color: var(--primary-text-color); }
+  .dl-warning {
+    font-size: 0.75rem;
+    color: #f9a825;
+    padding: 0 16px 8px;
+  }
+  .dl-warning[hidden] { display: none; }
 `;
 
 const TIMERS_TEMPLATE = `
@@ -1772,6 +1954,11 @@ const TIMERS_TEMPLATE = `
         <span class="field-error" id="recErr"></span>
       </div>
     </div>
+    <div class="toggle-row">
+      <span class="toggle-label">Background Downloads</span>
+      <ha-switch id="downloadEnabled"></ha-switch>
+    </div>
+    <div class="dl-warning" id="dlWarning" hidden>Downloads are disabled</div>
     <div class="status-text" id="statusText">Range: 0:15 – 10:00</div>
   </ha-card>
 `;
@@ -1805,13 +1992,19 @@ class DragontreeReolinkTimersCard extends HTMLElement {
 
   async _loadConfig() {
     try {
-      const result = await this._hass.callWS({ type: 'dragontree_reolink/get_timer_config' });
+      const [timerResult, dlResult] = await Promise.all([
+        this._hass.callWS({ type: 'dragontree_reolink/get_timer_config' }),
+        this._hass.callWS({ type: 'dragontree_reolink/get_download_config' }),
+      ]);
       this.shadowRoot.getElementById('liveTimeout').value =
-        this._secsToMmss(result.live_timeout_secs);
+        this._secsToMmss(timerResult.live_timeout_secs);
       this.shadowRoot.getElementById('recTimeout').value =
-        this._secsToMmss(result.record_timeout_secs);
+        this._secsToMmss(timerResult.record_timeout_secs);
+      const dlSwitch = this.shadowRoot.getElementById('downloadEnabled');
+      dlSwitch.checked = dlResult.download_enabled;
+      this._updateDlWarning(dlResult.download_enabled);
     } catch (e) {
-      console.error('[reolink] Failed to load timer config:', e);
+      console.error('[reolink] Failed to load config:', e);
     }
   }
 
@@ -1824,6 +2017,7 @@ class DragontreeReolinkTimersCard extends HTMLElement {
     sr.getElementById('liveTimeout').addEventListener('blur', onLiveChange);
     sr.getElementById('recTimeout').addEventListener('change', onRecChange);
     sr.getElementById('recTimeout').addEventListener('blur', onRecChange);
+    sr.getElementById('downloadEnabled').addEventListener('change', () => this._saveDownload());
   }
 
   _onFieldChange(inputId, errId) {
@@ -1879,6 +2073,30 @@ class DragontreeReolinkTimersCard extends HTMLElement {
     } finally {
       this._saving = false;
     }
+  }
+
+  async _saveDownload() {
+    const sr = this.shadowRoot;
+    const enabled = sr.getElementById('downloadEnabled').checked;
+    try {
+      await this._hass.callWS({
+        type: 'dragontree_reolink/set_download_config',
+        download_enabled: enabled,
+      });
+      this._updateDlWarning(enabled);
+      const statusEl = sr.getElementById('statusText');
+      if (statusEl) {
+        statusEl.textContent = 'Saved.';
+        setTimeout(() => { statusEl.textContent = 'Range: 0:15 – 10:00'; }, 2000);
+      }
+    } catch (e) {
+      console.error('[reolink] Failed to save download config:', e);
+    }
+  }
+
+  _updateDlWarning(enabled) {
+    const el = this.shadowRoot.getElementById('dlWarning');
+    if (el) el.hidden = enabled;
   }
 
   _secsToMmss(secs) {
@@ -2264,6 +2482,7 @@ class DragontreeReolinkLiveCard extends HTMLElement {
 
     const videoArea = this.shadowRoot.getElementById('videoArea');
     if (videoArea) {
+      this._resetZoom();
       videoArea.innerHTML = '';
       const streamEl = document.createElement('ha-camera-stream');
       streamEl.hass = this._hass;
@@ -2293,6 +2512,7 @@ class DragontreeReolinkLiveCard extends HTMLElement {
     this._liveTimerInterval = null;
 
     const videoArea = this.shadowRoot.getElementById('videoArea');
+    this._resetZoom();
     if (videoArea) {
       if (this._selectedCamera) {
         videoArea.innerHTML = `
