@@ -713,13 +713,21 @@ class ReolinkDownloadCoordinator:
                             os.path.basename(file_path), attempt,
                         )
                         await asyncio.sleep(DOWNLOAD_RETRY_DELAY_S)
-                        await self._queue.put((host, channel, entry_id, vod_file, file_path))
-                        self._queued_paths.add(file_path)
-                        self._pending_meta[file_path] = self._build_pending_meta(
-                            host, channel, vod_file, file_path, "queued"
-                        )
-                        self._notify_sensors()
-                        self.hass.bus.async_fire(EVENT_QUEUE_CHANGED)
+                        if self._download_enabled:
+                            await self._queue.put((host, channel, entry_id, vod_file, file_path))
+                            self._queued_paths.add(file_path)
+                            self._pending_meta[file_path] = self._build_pending_meta(
+                                host, channel, vod_file, file_path, "queued"
+                            )
+                            self._notify_sensors()
+                            self.hass.bus.async_fire(EVENT_QUEUE_CHANGED)
+                        else:
+                            _attempts.pop(file_path, None)
+                            LOGGER.info(
+                                "Downloads disabled — dropping %s after failure; "
+                                "poll will retry later",
+                                os.path.basename(file_path),
+                            )
                     else:
                         _attempts.pop(file_path, None)
                         LOGGER.warning(
