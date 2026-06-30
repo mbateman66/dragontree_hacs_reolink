@@ -531,6 +531,28 @@ class ReolinkDownloadCoordinator:
                     count=INIT_RECORDINGS_PER_CAMERA,
                 )
 
+    async def _resume_recent_downloads(self) -> None:
+        """On re-enable, skip the historical backlog: queue only the most
+        recent INIT_RECORDINGS_PER_CAMERA recordings per camera (same as a
+        fresh install), and fast-forward the poll cursor so the next regular
+        poll doesn't also try to backfill the whole disabled gap.
+        """
+        for config_entry in self.hass.config_entries.async_loaded_entries(REOLINK_DOMAIN):
+            try:
+                host = config_entry.runtime_data.host
+            except AttributeError:
+                continue
+            for channel in host.api.channels:
+                if not self._channel_has_replay(host, channel):
+                    continue
+                key = f"{config_entry.entry_id}_{channel}"
+                now = self._camera_now(host)
+                self._last_check[key] = now
+                await self._db.upsert_last_check(key, now.isoformat())
+                await self._queue_recent(
+                    config_entry.entry_id, host, channel, count=INIT_RECORDINGS_PER_CAMERA
+                )
+
     async def _queue_recent(
         self, entry_id: str, host: Any, channel: int, count: int
     ) -> None:
@@ -1023,6 +1045,7 @@ class ReolinkDownloadCoordinator:
 
     async def async_set_download_config(self, download_enabled: bool) -> None:
         """Persist new download setting and drain queue if disabling."""
+        was_enabled = self._download_enabled
         self._download_enabled = download_enabled
         if not download_enabled:
             drained = 0
@@ -1038,6 +1061,8 @@ class ReolinkDownloadCoordinator:
             if drained:
                 self._notify_sensors()
                 self.hass.bus.async_fire(EVENT_QUEUE_CHANGED)
+        elif not was_enabled:
+            await self._resume_recent_downloads()
         await self._download_config_store.async_save({"download_enabled": download_enabled})
 
     # ------------------------------------------------------------------ #
