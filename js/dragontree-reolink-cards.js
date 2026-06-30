@@ -1862,6 +1862,20 @@ const TIMERS_STYLE = `
     color: var(--secondary-text-color, #888);
     border-top: 1px solid var(--divider-color, #e0e0e0);
   }
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    min-height: 52px;
+  }
+  .toggle-label { font-size: 1rem; color: var(--primary-text-color); }
+  .dl-warning {
+    font-size: 0.75rem;
+    color: #f9a825;
+    padding: 0 16px 8px;
+  }
+  .dl-warning[hidden] { display: none; }
 `;
 
 const TIMERS_TEMPLATE = `
@@ -1881,6 +1895,11 @@ const TIMERS_TEMPLATE = `
         <span class="field-error" id="recErr"></span>
       </div>
     </div>
+    <div class="toggle-row">
+      <span class="toggle-label">Background Downloads</span>
+      <ha-switch id="downloadEnabled"></ha-switch>
+    </div>
+    <div class="dl-warning" id="dlWarning" hidden>Downloads are disabled</div>
     <div class="status-text" id="statusText">Range: 0:15 – 10:00</div>
   </ha-card>
 `;
@@ -1914,13 +1933,19 @@ class DragontreeReolinkTimersCard extends HTMLElement {
 
   async _loadConfig() {
     try {
-      const result = await this._hass.callWS({ type: 'dragontree_reolink/get_timer_config' });
+      const [timerResult, dlResult] = await Promise.all([
+        this._hass.callWS({ type: 'dragontree_reolink/get_timer_config' }),
+        this._hass.callWS({ type: 'dragontree_reolink/get_download_config' }),
+      ]);
       this.shadowRoot.getElementById('liveTimeout').value =
-        this._secsToMmss(result.live_timeout_secs);
+        this._secsToMmss(timerResult.live_timeout_secs);
       this.shadowRoot.getElementById('recTimeout').value =
-        this._secsToMmss(result.record_timeout_secs);
+        this._secsToMmss(timerResult.record_timeout_secs);
+      const dlSwitch = this.shadowRoot.getElementById('downloadEnabled');
+      dlSwitch.checked = dlResult.download_enabled;
+      this._updateDlWarning(dlResult.download_enabled);
     } catch (e) {
-      console.error('[reolink] Failed to load timer config:', e);
+      console.error('[reolink] Failed to load config:', e);
     }
   }
 
@@ -1933,6 +1958,7 @@ class DragontreeReolinkTimersCard extends HTMLElement {
     sr.getElementById('liveTimeout').addEventListener('blur', onLiveChange);
     sr.getElementById('recTimeout').addEventListener('change', onRecChange);
     sr.getElementById('recTimeout').addEventListener('blur', onRecChange);
+    sr.getElementById('downloadEnabled').addEventListener('change', () => this._saveDownload());
   }
 
   _onFieldChange(inputId, errId) {
@@ -1988,6 +2014,30 @@ class DragontreeReolinkTimersCard extends HTMLElement {
     } finally {
       this._saving = false;
     }
+  }
+
+  async _saveDownload() {
+    const sr = this.shadowRoot;
+    const enabled = sr.getElementById('downloadEnabled').checked;
+    try {
+      await this._hass.callWS({
+        type: 'dragontree_reolink/set_download_config',
+        download_enabled: enabled,
+      });
+      this._updateDlWarning(enabled);
+      const statusEl = sr.getElementById('statusText');
+      if (statusEl) {
+        statusEl.textContent = 'Saved.';
+        setTimeout(() => { statusEl.textContent = 'Range: 0:15 – 10:00'; }, 2000);
+      }
+    } catch (e) {
+      console.error('[reolink] Failed to save download config:', e);
+    }
+  }
+
+  _updateDlWarning(enabled) {
+    const el = this.shadowRoot.getElementById('dlWarning');
+    if (el) el.hidden = enabled;
   }
 
   _secsToMmss(secs) {
