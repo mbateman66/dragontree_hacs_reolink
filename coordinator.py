@@ -388,7 +388,14 @@ class ReolinkDownloadCoordinator:
         A POLL_LOOKBACK_BUFFER overlap is applied so recordings that the camera
         finishes writing after the previous poll window closes are not missed.
         Duplicate-checking in _maybe_enqueue ensures nothing is downloaded twice.
+
+        Skipped entirely while downloads are disabled: this leaves
+        ``_last_check`` untouched so that once downloads are re-enabled, the
+        next poll's lookback window naturally covers everything missed while
+        disabled, instead of having silently scrolled past it.
         """
+        if not self._download_enabled:
+            return
         config_entry = self.hass.config_entries.async_get_entry(entry_id)
         if config_entry is None:
             return
